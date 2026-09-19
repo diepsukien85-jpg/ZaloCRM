@@ -161,7 +161,7 @@ export interface UserInfoCacheEntry {
 const USER_INFO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Fetch zaloName + avatar + globalId + username from API with a per-pool in-memory cache
-async function resolveZaloName(
+export async function resolveZaloName(
   api: any,
   uid: string,
   cache: Map<string, UserInfoCacheEntry>,
@@ -171,29 +171,41 @@ async function resolveZaloName(
     return { zaloName: cached.zaloName, avatar: cached.avatar, globalId: cached.globalId, username: cached.username };
   }
 
-  try {
-    const result = await api.getUserInfo(uid);
-    const profiles = result?.changed_profiles || {};
-    const profile = profiles[uid] || profiles[`${uid}_0`];
-    if (profile) {
-      const entry: UserInfoCacheEntry = {
-        zaloName:
-          profile.zaloName ||
-          profile.zalo_name ||
-          profile.displayName ||
-          profile.display_name ||
-          '',
-        avatar: profile.avatar || '',
-        phone: profile.phoneNumber || '',
-        globalId: String(profile.globalId || ''),
-        username: String(profile.username || ''),
-        cachedAt: Date.now(),
-      };
-      cache.set(uid, entry);
-      return { zaloName: entry.zaloName, avatar: entry.avatar, globalId: entry.globalId, username: entry.username };
+  const attempts = 3;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const result = await api.getUserInfo(uid);
+      const profiles = result?.changed_profiles || {};
+      const profile = profiles[uid] || profiles[`${uid}_0`];
+      if (profile) {
+        const entry: UserInfoCacheEntry = {
+          zaloName:
+            profile.zaloName ||
+            profile.zalo_name ||
+            profile.displayName ||
+            profile.display_name ||
+            '',
+          avatar: profile.avatar || '',
+          phone: profile.phoneNumber || '',
+          globalId: String(profile.globalId || ''),
+          username: String(profile.username || ''),
+          cachedAt: Date.now(),
+        };
+        cache.set(uid, entry);
+        return { zaloName: entry.zaloName, avatar: entry.avatar, globalId: entry.globalId, username: entry.username };
+      }
+      break; // gọi được nhưng không có profile → không retry
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientNetErr(err)) break; // lỗi nghiệp vụ/quyền → thử lại vô ích
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 700 * (i + 1)));
     }
-  } catch (err) {
-    logger.warn(`[zalo] getUserInfo failed for ${uid}:`, err);
+  }
+  if (lastErr) {
+    // Mạng chập chờn từ Zalo → chỉ debug (không vào *-error.log). Lỗi thật → warn.
+    if (isTransientNetErr(lastErr)) logger.debug(`[zalo] getUserInfo tạm không lấy được (mạng chập chờn) cho ${uid}`);
+    else logger.warn(`[zalo] getUserInfo failed for ${uid}:`, lastErr);
   }
   return { zaloName: '', avatar: '', globalId: '', username: '' };
 }
@@ -204,21 +216,59 @@ interface ResolvedGroup {
   membersCount: number | null;
 }
 
-// Fetch group display name + avatar + member count from the zca-js API
-async function resolveGroupInfo(api: any, groupId: string): Promise<ResolvedGroup> {
-  try {
-    const result = await api.getGroupInfo(groupId);
-    const info = result?.gridInfoMap?.[groupId];
-    const members = info?.memVerList || info?.memList || info?.members;
-    return {
-      name: info?.name || '',
-      avatar: info?.avt || info?.fullAvt || info?.avatar || '',
-      membersCount: Array.isArray(members) ? members.length : (info?.totalMember || null),
-    };
-  } catch (err) {
-    logger.warn(`[zalo] getGroupInfo failed for ${groupId}:`, err);
-    return { name: '', avatar: '', membersCount: null };
+// Cache group info: tên/avatar/số thành viên nhóm gần như không đổi theo từng tin.
+// resolveGroupInfo() TRƯỚC ĐÂY gọi Zalo trên MỖI tin nhắn nhóm → nhóm chat sôi động
+// = hàng chục lệnh getGroupInfo/phút, mỗi lệnh là 1 kết nối TLS ra server Zalo và Zalo
+// hay reset (ECONNRESET). Cache 10 phút giảm gọi ~99% → ít reset, ít log rác.
+const GROUP_INFO_TTL_MS = 10 * 60 * 1000;
+const groupInfoCache = new Map<string, { data: ResolvedGroup; at: number }>();
+
+// Lỗi mạng CHẬP CHỜN (Zalo reset TLS / DNS / timeout) — thử lại được, KHÔNG phải lỗi code.
+// Không đưa các lỗi này vào log ERROR (console.warn → stderr → *-error.log → Tiểu Linh báo).
+export function isTransientNetErr(err: any): boolean {
+  const code = String(err?.code || err?.cause?.code || '');
+  if (/^(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_)/.test(code)) return true;
+  const msg = String(err?.message || '') + ' ' + String(err?.cause?.message || '');
+  return /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|network|read ECONN/i.test(msg);
+}
+
+// Fetch group display name + avatar + member count from the zca-js API.
+// Có cache + retry lỗi mạng chập chờn (Zalo hay ECONNRESET khi gọi từ xa).
+export async function resolveGroupInfo(api: any, groupId: string): Promise<ResolvedGroup> {
+  const cached = groupInfoCache.get(groupId);
+  if (cached && Date.now() - cached.at < GROUP_INFO_TTL_MS) return cached.data;
+
+  const attempts = 3;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const result = await api.getGroupInfo(groupId);
+      const info = result?.gridInfoMap?.[groupId];
+      const members = info?.memVerList || info?.memList || info?.members;
+      const data: ResolvedGroup = {
+        name: info?.name || '',
+        avatar: info?.avt || info?.fullAvt || info?.avatar || '',
+        membersCount: Array.isArray(members) ? members.length : (info?.totalMember || null),
+      };
+      groupInfoCache.set(groupId, { data, at: Date.now() });
+      return data;
+    } catch (err) {
+      lastErr = err;
+      // Lỗi mạng chập chờn → thử lại; lỗi nghiệp vụ/quyền → dừng ngay (thử lại vô ích).
+      if (!isTransientNetErr(err)) break;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+    }
   }
+
+  // Hết lượt: còn cache cũ thì dùng tạm (tên nhóm đúng vẫn hơn rỗng).
+  if (cached) return cached.data;
+  if (isTransientNetErr(lastErr)) {
+    // Mạng chập chờn từ phía Zalo — KHÔNG log ERROR (tránh spam + Tiểu Linh báo oan). Chỉ debug.
+    logger.debug(`[zalo] getGroupInfo tạm không lấy được (mạng chập chờn) cho ${groupId}`);
+  } else {
+    logger.warn(`[zalo] getGroupInfo failed for ${groupId}:`, lastErr);
+  }
+  return { name: '', avatar: '', membersCount: null };
 }
 
 export interface ListenerContext {
