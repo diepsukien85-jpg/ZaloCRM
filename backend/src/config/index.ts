@@ -46,13 +46,39 @@ export const config = {
   uploadDir: envValue('UPLOAD_DIR') || '/var/lib/zalo-crm/files',
   appUrl: envValue('APP_URL') || 'http://localhost:3000',
 
-  /* --- S3/MinIO storage for chat attachments --- */
-  s3Endpoint: envValue('S3_ENDPOINT') || 'http://localhost:9000',
-  s3PublicUrl: envValue('S3_PUBLIC_URL') || 'http://localhost:9000',
-  s3Bucket: envValue('S3_BUCKET') || 'zalocrm-attachments',
-  s3AccessKey: envValue('S3_ACCESS_KEY') || 'minioadmin',
-  s3SecretKey: envValue('S3_SECRET_KEY') || 'minioadmin',
-  s3Region: envValue('S3_REGION') || 'us-east-1',
+  /* --- Kho ảnh/video/file khung chat: đĩa cục bộ + đồng bộ Google Drive ---
+   * Thay Cloudflare R2 từ 2026-09-22 để cắt chi phí. Xem shared/storage/media-store.ts. */
+  mediaDir: envValue('MEDIA_DIR') || 'data/media',
+  // Đĩa chỉ giữ bản nóng; quá hạn thì xoá, cần lại thì kéo về từ Drive.
+  // 0 = không bao giờ dọn. Đo 22/09/2026: ~148k file/ngày ≈ 19 GiB/ngày,
+  // nên 3 ngày ≈ 57 GiB — đó là lý do KHÔNG được để số này lớn.
+  mediaLocalRetentionDays: parseInt(envValue('MEDIA_LOCAL_RETENTION_DAYS') || '3'),
+  // Phao cứu sinh: đĩa tụt dưới ngưỡng này thì dọn theo TUỔI kể cả khi chưa xác
+  // nhận được bản sao trên Drive. Thà mất ảnh cũ còn hơn treo cả máy Mac mini.
+  mediaMinFreeGb: parseInt(envValue('MEDIA_MIN_FREE_GB') || '20'),
+  // Số file đẩy lên Drive song song. Nối tiếp (1) thì 148k file/ngày không kịp.
+  mediaUploadConcurrency: parseInt(envValue('MEDIA_UPLOAD_CONCURRENCY') || '6'),
+  // Vòng đối chiếu chỉ soi mấy ngày gần nhất — liệt kê cả cửa sổ giữ bản nóng ở
+  // quy mô này là hàng trăm nghìn file mỗi lượt, quá tốn.
+  mediaReconcileWindowDays: parseInt(envValue('MEDIA_RECONCILE_WINDOW_DAYS') || '2'),
+  // Xoá luôn thư mục ngày cũ trên Drive sau ngần này ngày. 0 = giữ mãi.
+  // 5TB / ~19 GiB mỗi ngày ≈ 270 ngày mới đầy.
+  driveRetentionDays: parseInt(envValue('DRIVE_RETENTION_DAYS') || '0'),
+  // Thư mục Drive chứa bản sao. Trống → tự tạo/tìm theo tên ở gốc My Drive.
+  driveMediaFolderId: envValue('DRIVE_MEDIA_FOLDER_ID') || '',
+  driveMediaFolderName: envValue('DRIVE_MEDIA_FOLDER_NAME') || 'ZaloCRM-Media',
+  // OAuth của TÀI KHOẢN GOOGLE THẬT — service account KHÔNG upload được nội dung
+  // vào My Drive ("Service Accounts do not have storage quota"). Tạo bằng
+  // `npm run drive:setup`.
+  driveOauthClientPath: envValue('DRIVE_OAUTH_CLIENT') || '~/.config/gcp/drive-oauth-client.json',
+  driveOauthTokenPath: envValue('DRIVE_OAUTH_TOKEN') || '~/.config/gcp/drive-oauth-token.json',
+  // Chu kỳ quét đối chiếu hai chiều (phút). 0 = tắt vòng nền.
+  mediaSyncIntervalMinutes: parseInt(envValue('MEDIA_SYNC_INTERVAL_MINUTES') || '15'),
+
+  /* --- S3 cũ: CHỈ còn dùng để NHẬN DIỆN url tồn trong DB trước 2026-09-22 ---
+   * Không còn client S3 nào ghi lên đây nữa (r2-client.ts đã xoá). */
+  s3Endpoint: envValue('S3_ENDPOINT') || '',
+  s3PublicUrl: envValue('S3_PUBLIC_URL') || '',
 
   aiDefaultProvider: envValue('AI_DEFAULT_PROVIDER') || 'anthropic',
   aiDefaultModel: envValue('AI_DEFAULT_MODEL') || 'claude-sonnet-4-6',

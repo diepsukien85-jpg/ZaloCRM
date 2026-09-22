@@ -28,3 +28,6 @@ backend/static/
 
 # Build-time schema overlays (local only) — quy ước thư mục _* trong prisma/schema/
 backend/prisma/schema/_*/
+
+# Kho media cục bộ (bản gốc ảnh/video chat) — bản sao nằm trên Google Drive
+backend/data/media/

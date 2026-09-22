@@ -10,8 +10,7 @@ import { runAutomationRules } from '../automation/automation-service.js';
 import { applyContactAggregateFromMessage, applyContactInteraction, applyFriendAggregate } from '../contacts/contact-aggregate.js';
 import { onInboundMessage as onInboundScoring, onOutboundMessage as onOutboundScoring } from '../scoring/scoring-hooks.js';
 import { syncReminderFromMessage } from '../contacts/reminder-sync.js';
-import { uploadBuffer } from '../../shared/storage/r2-client.js';
-import { config } from '../../config/index.js';
+import { uploadBuffer, isManagedMediaUrl } from '../../shared/storage/media-store.js';
 
 export interface IncomingMessage {
   accountId: string;
@@ -83,17 +82,12 @@ function safeParseJsonObject(value: string): Record<string, unknown> | null {
 }
 
 // URL đã nằm trong kho của mình thì không mirror lại (tránh vòng lặp tự sao chép).
-// Nhận cả URL MinIO cũ (host 127.0.0.1:9000, còn trong DB trước 2026-08-13) lẫn
-// URL R2 mới — kho cũ không còn ghi nhưng dữ liệu cũ vẫn chảy qua đây.
-function isLocalStorageUrl(value: string): boolean {
-  if (value.startsWith(`${config.s3PublicUrl}/`)) return true;
-  return value.startsWith(`${config.s3Endpoint}/`) || value.includes('127.0.0.1:9000/');
-}
-
+// isManagedMediaUrl nhận cả kho hiện tại (/api/v1/media/…) lẫn hai kho cũ còn tồn
+// trong DB: R2 (crmcdn.shinsulab.com, tới 2026-09-22) và MinIO (127.0.0.1:9000).
 function isMirrorableUrl(value: unknown): value is string {
   return typeof value === 'string' &&
     /^https?:\/\//i.test(value) &&
-    !isLocalStorageUrl(value);
+    !isManagedMediaUrl(value);
 }
 
 function fileNameFromUrl(url: string, contentType: string, mimeType: string): string {
@@ -144,6 +138,13 @@ async function mirrorRemoteMediaUrl(url: string, contentType: string): Promise<s
   }
   const arrayBuffer = await response.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
+  // Zalo CDN thỉnh thoảng trả 200 kèm thân RỖNG. Không chặn ở đây thì ta lưu một
+  // file 0 byte rồi GHI ĐÈ url Zalo gốc bằng nó — ảnh hỏng vĩnh viễn, không cứu
+  // được. Ném lỗi để nơi gọi giữ nguyên url gốc, lần sau mở vẫn còn xem được.
+  // (Phát hiện 23/09/2026: 2 ảnh đã mất theo đúng kiểu này.)
+  if (buffer.length === 0) {
+    throw new Error('thân phản hồi rỗng (0 byte)');
+  }
   const mimeType = response.headers.get('content-type')?.split(';')[0] || guessMimeType(url, contentType);
   const uploaded = await uploadBuffer(buffer, mimeType, fileNameFromUrl(url, contentType, mimeType));
   return uploaded.url;

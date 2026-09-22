@@ -35,6 +35,8 @@ import { chatRoutes } from './modules/chat/chat-routes.js';
 import { folderRoutes } from './modules/chat/folder-routes.js';
 import { presetRoutes } from './modules/chat/preset-routes.js';
 import { chatAttachmentRoutes } from './modules/chat/chat-attachment-routes.js';
+import { mediaRoutes, mediaAdminRoutes } from './modules/chat/media-routes.js';
+import { startMediaSync } from './shared/storage/media-sync.js';
 import { contactRoutes } from './modules/contacts/contact-routes.js';
 import { statusRoutes } from './modules/contacts/status-routes.js';
 import { contactSubResourceRoutes } from './modules/contacts/contact-sub-resource-routes.js';
@@ -117,8 +119,12 @@ async function bootstrap() {
   await app.register(rateLimit, {
     max: 500,
     timeWindow: '1 minute',
-    // Skip rate limiting for static assets — only limit API routes
-    allowList: (request: { url: string }) => !request.url.startsWith('/api/'),
+    // Skip rate limiting for static assets — only limit API routes.
+    // /api/v1/media/* cũng được tha: nó là CDN ảnh chat (thay R2 từ 2026-09-22),
+    // mở một hội thoại nhiều ảnh là chục request một lúc, tính vào hạn 500/phút
+    // thì nhân viên đang chat sẽ bị chặn oan.
+    allowList: (request: { url: string }) =>
+      !request.url.startsWith('/api/') || request.url.startsWith('/api/v1/media/'),
   });
 
   await app.register(fastifyMultipart, {
@@ -204,6 +210,8 @@ async function bootstrap() {
   await app.register(folderRoutes);
   await app.register(presetRoutes);
   await app.register(chatAttachmentRoutes);
+  await app.register(mediaRoutes);
+  await app.register(mediaAdminRoutes);
   await app.register(contactRoutes);
   await app.register(statusRoutes);
   await app.register(contactSubResourceRoutes);
@@ -337,6 +345,8 @@ async function bootstrap() {
     startContactIntelligence();
     startLabelsBackgroundSync(60_000); // realtime-ish 2-way pull every 60s
     startInteractionCron(); // daily silent_30d detection (02:00 VN)
+    // Kho ảnh chat: đối chiếu hai chiều đĩa ↔ Google Drive (thay R2 từ 2026-09-22)
+    startMediaSync();
     // Phase 8 — Engagement heatmap classification (02:30 VN daily)
     const { startEngagementCron } = await import('./modules/engagement/engagement-cron.js');
     startEngagementCron();

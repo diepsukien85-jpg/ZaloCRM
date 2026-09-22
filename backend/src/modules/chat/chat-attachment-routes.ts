@@ -1,7 +1,8 @@
 /**
  * chat-attachment-routes.ts — Upload chat attachments (image/video) and send via Zalo.
  * Accepts multipart form with 1+ files + optional caption.
- * Flow: validate → save to tmp → upload to MinIO → call zca-js sendImage/sendVideo with local path → persist Message rows.
+ * Flow: validate → save to tmp → ghi vào kho media (đĩa + đồng bộ Drive) → call zca-js
+ * sendImage/sendVideo with local path → persist Message rows.
  */
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { randomUUID } from 'node:crypto';
@@ -16,7 +17,7 @@ import { zaloPool } from '../zalo/zalo-pool.js';
 import { zaloRateLimiter } from '../zalo/zalo-rate-limiter.js';
 import { zaloOps } from '../../shared/zalo-operations.js';
 import { generateThumbnail, sendNativeVideo } from '../../shared/video-processor.js';
-import { uploadBuffer, type UploadResult } from '../../shared/storage/r2-client.js';
+import { uploadBuffer, type UploadResult } from '../../shared/storage/media-store.js';
 import { logger } from '../../shared/utils/logger.js';
 
 const IMAGE_MAX = 100 * 1024 * 1024;
@@ -120,7 +121,7 @@ export async function chatAttachmentRoutes(app: FastifyInstance) {
       const threadType = conversation.threadType === 'group' ? 1 : 0;
       const io = (app as any).io as Server;
 
-      // Write each file to tmp + upload to MinIO in parallel
+      // Write each file to tmp + ghi bản lưu vào kho media, song song
       const tmpRoot = path.join(tmpdir(), 'zalocrm-upload', randomUUID());
       await mkdir(tmpRoot, { recursive: true });
       const tmpPaths: string[] = [];
