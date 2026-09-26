@@ -32,6 +32,8 @@ import {
   validateProfileInput, type PlaybookInput, type ProfileInput,
 } from './config-service.js';
 import { evaluateConversation } from './auto-reply-service.js';
+import { isCatalogEnabled } from './catalog-service.js';
+import { defaultHandoffChatId, isTelegramConfigured, sendTelegram } from './handoff-notify.js';
 import { evaluateOutcomes, learnFromFeedback, qualityByDay, runDailyLearning, sanitizeLesson } from './learning-service.js';
 
 const ADMIN = { preHandler: requireRole('owner', 'admin') };
@@ -98,6 +100,12 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
               quality7d: quality7(p.zaloAccountId),
             };
           }),
+        // Kết nối phía server (không lộ token): kho sản phẩm bot-noi-bo, Telegram báo chuyển người.
+        server: {
+          catalog: isCatalogEnabled(),
+          telegram: isTelegramConfigured(),
+          defaultChatId: defaultHandoffChatId() ? `…${defaultHandoffChatId()!.slice(-4)}` : null,
+        },
         accounts: accounts.map((a) => ({
           id: a.id,
           name: a.displayName || a.phone || a.id.slice(0, 8),
@@ -295,6 +303,22 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
         };
       }),
     };
+  });
+
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/test-telegram', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    const acc = await orgAccount(orgId, accountId);
+    if (!acc) return reply.status(404).send({ error: 'Không tìm thấy nick Zalo' });
+    const body = (request.body ?? {}) as { chatId?: unknown };
+    const chatId = (typeof body.chatId === 'string' && body.chatId.trim()) || defaultHandoffChatId();
+    if (!isTelegramConfigured() || !chatId) return reply.status(400).send({ error: 'Server chưa cấu hình bot Telegram / chat id' });
+    try {
+      await sendTelegram(chatId, `✅ Thử thông báo chuyển người của AI · nick <b>${(acc.displayName || '').replace(/</g, '&lt;')}</b>. Khi AI chuyển khách cho anh, tin sẽ về đây.`);
+      return { ok: true };
+    } catch (err: any) {
+      return reply.status(400).send({ error: `Gửi Telegram lỗi: ${err?.message ?? err}` });
+    }
   });
 
   // ── Vòng tự học ─────────────────────────────────────────────────────────

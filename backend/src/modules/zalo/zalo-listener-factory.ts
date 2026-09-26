@@ -9,7 +9,7 @@ import { logger } from '../../shared/utils/logger.js';
 import { prisma } from '../../shared/database/prisma-client.js';
 import { handleIncomingMessage, handleMessageUndo } from '../chat/message-handler.js';
 import { isGroupIgnored, recordIgnoredSelfEcho } from '../chat/ignored-groups-service.js';
-import { detectContentType, extractAlbumInfo, updateContactAvatar } from './zalo-message-helpers.js';
+import { detectContentType, extractAlbumInfo, updateContactAvatar, updateContactGender, zaloGender } from './zalo-message-helpers.js';
 import { handleFriendEvent } from './friend-event-handler.js';
 import { consumeIfExpected as consumeReactionEcho } from '../chat/reaction-echo-cache.js';
 
@@ -156,6 +156,7 @@ export interface UserInfoCacheEntry {
   phone?: string;
   globalId: string;   // Zalo toàn cục, không đổi giữa các viewer account — khóa dedup chính
   username: string;   // Zalo handle (t_xxx) — cũng toàn cục, debug-friendly
+  gender?: 'male' | 'female' | null; // Zalo: 0 = nam, 1 = nữ
   cachedAt: number;
 }
 
@@ -166,10 +167,10 @@ export async function resolveZaloName(
   api: any,
   uid: string,
   cache: Map<string, UserInfoCacheEntry>,
-): Promise<{ zaloName: string; avatar: string; globalId: string; username: string }> {
+): Promise<{ zaloName: string; avatar: string; globalId: string; username: string; gender?: 'male' | 'female' | null }> {
   const cached = cache.get(uid);
   if (cached && Date.now() - cached.cachedAt < USER_INFO_CACHE_TTL_MS) {
-    return { zaloName: cached.zaloName, avatar: cached.avatar, globalId: cached.globalId, username: cached.username };
+    return { zaloName: cached.zaloName, avatar: cached.avatar, globalId: cached.globalId, username: cached.username, gender: cached.gender };
   }
 
   const attempts = 3;
@@ -188,13 +189,14 @@ export async function resolveZaloName(
             profile.display_name ||
             '',
           avatar: profile.avatar || '',
+          gender: zaloGender(profile.gender),
           phone: profile.phoneNumber || '',
           globalId: String(profile.globalId || ''),
           username: String(profile.username || ''),
           cachedAt: Date.now(),
         };
         cache.set(uid, entry);
-        return { zaloName: entry.zaloName, avatar: entry.avatar, globalId: entry.globalId, username: entry.username };
+        return { zaloName: entry.zaloName, avatar: entry.avatar, globalId: entry.globalId, username: entry.username, gender: entry.gender };
       }
       break; // gọi được nhưng không có profile → không retry
     } catch (err) {
@@ -460,6 +462,7 @@ export function attachZaloListener(ctx: ListenerContext): void {
           } else {
             if (userInfo.zaloName) senderName = userInfo.zaloName;
             if (userInfo.avatar) updateContactAvatar(senderUid, userInfo.avatar);
+            if (userInfo.gender && !isGroup) updateContactGender(senderUid, userInfo.gender);
           }
         }
       }

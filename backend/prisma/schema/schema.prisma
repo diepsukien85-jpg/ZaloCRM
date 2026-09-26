@@ -2351,6 +2351,16 @@ model AiAutoReplyProfile {
   // [{ path, content, mode: 'always' | 'auto' | 'off' }] — 'auto' = chỉ nạp khi liên quan câu khách hỏi.
   guideFiles                  Json     @default("[]") @map("guide_files")
   // Vòng tự học: rút bài học từ kết quả mỗi lượt trả lời + phản hồi của chủ shop.
+  // Xưng hô theo giới tính Zalo của khách: nữ → gọi "chị", nam → gọi "anh", chưa rõ → "anh/chị".
+  addressByGender             Boolean  @default(true) @map("address_by_gender")
+  selfPronoun                 String   @default("em") @map("self_pronoun") // AI tự xưng
+  // Tra kho bot-noi-bo (giá lẻ/CTV/NPP, tồn, mô tả) để tư vấn cụ thể + gửi ảnh sản phẩm.
+  useProductCatalog           Boolean  @default(true) @map("use_product_catalog")
+  sendProductImages           Boolean  @default(true) @map("send_product_images")
+  // Chuyển người: báo Telegram chủ shop (chat id riêng nick, trống = mặc định server).
+  notifyHandoff               Boolean  @default(true) @map("notify_handoff")
+  handoffChatId               String?  @map("handoff_chat_id")
+  handoffPauseMinutes         Int      @default(60) @map("handoff_pause_minutes") // không báo lại cùng khách trong X phút
   learningEnabled             Boolean  @default(true) @map("learning_enabled")
   lastLearnedAt               DateTime? @map("last_learned_at")
   verifyGrounding             Boolean  @default(true) @map("verify_grounding")

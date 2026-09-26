@@ -18,12 +18,16 @@ import { prisma } from '../../../shared/database/prisma-client.js';
 import { logger } from '../../../shared/utils/logger.js';
 import { zaloOps } from '../../../shared/zalo-operations.js';
 import { zaloPool } from '../../zalo/zalo-pool.js';
+import { zaloGender } from '../../zalo/zalo-message-helpers.js';
 import { automationEventBus } from '../../automation/engine/event-bus.js';
 import { applyContactAggregateFromMessage, applyFriendAggregate } from '../../contacts/contact-aggregate.js';
 import { getAiConfig, getProviderApiKey, generateText } from '../ai-service.js';
 import { parseOffsetMinutes, orgDayRange } from '../daily-brief-service.js';
 import { getProfile } from './config-service.js';
 import { activeLessons, startLearningScheduler } from './learning-service.js';
+import { isCatalogEnabled, renderProducts, searchProducts, type CatalogProduct, type ProductQuery } from './catalog-service.js';
+import { notifyHandoff } from './handoff-notify.js';
+import { sendToThread } from '../../api/public-api-routes.js';
 import { buildAutoReplyContext, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, localHour, matchesAnyKeyword,
@@ -72,6 +76,40 @@ export function matchTriggerTag(tags: string[], triggerTags: string[]): string |
   if (!tags.length || !triggerTags.length) return null;
   const have = new Set(tags.map(normalizeTagName).filter(Boolean));
   return triggerTags.find((t) => have.has(normalizeTagName(t))) ?? null;
+}
+
+// ── Giới tính khách (để gọi anh / chị) ─────────────────────────────────────
+
+/**
+ * Giới tính khách: lấy từ hồ sơ CRM; chưa có thì hỏi Zalo (getUserInfo qua đúng
+ * nick của hội thoại, đi qua rate limiter) rồi lưu lại. Không lấy được → null.
+ */
+export async function resolveCustomerGender(conv: {
+  zaloAccountId: string; externalThreadId: string | null; contactId: string | null;
+}): Promise<'male' | 'female' | null> {
+  if (!conv.contactId) return null;
+  const contact = await prisma.contact.findUnique({ where: { id: conv.contactId }, select: { gender: true } });
+  if (contact?.gender === 'male' || contact?.gender === 'female') return contact.gender;
+  if (!conv.externalThreadId || zaloPool.getInstance(conv.zaloAccountId)?.status !== 'connected') return null;
+  try {
+    const uid = conv.externalThreadId;
+    const res = await zaloOps.exec(
+      { accountId: conv.zaloAccountId, category: 'query', operation: 'getUserInfo(gender)' },
+      (api: any) => api.getUserInfo(uid),
+    ) as { changed_profiles?: Record<string, { gender?: unknown }> } | null;
+    const profile = res?.changed_profiles?.[uid] ?? res?.changed_profiles?.[`${uid}_0`];
+    const gender = zaloGender(profile?.gender);
+    if (gender) {
+      await prisma.contact.updateMany({
+        where: { id: conv.contactId, OR: [{ gender: null }, { gender: '' }, { gender: 'unknown' }] },
+        data: { gender },
+      });
+    }
+    return gender;
+  } catch (err: any) {
+    logger.debug(`[ai-auto-reply] không lấy được giới tính khách: ${err?.message ?? err}`);
+    return null;
+  }
 }
 
 // ── Nhật ký ────────────────────────────────────────────────────────────────
@@ -216,11 +254,48 @@ export async function evaluateConversation(
   if (texts.length === 0) return { decision: 'skipped', reason: 'khách chỉ gửi ảnh/sticker' };
   const customerText = texts.join('\n');
 
+  const convInfo = conv as { id: string; zaloAccountId: string; externalThreadId: string; contactId: string | null };
+
+  /**
+   * Chuyển cho người thật: (1) nói 1 câu với khách nếu có (không đánh dấu "đã trả lời"
+   * để hội thoại vẫn nằm ở Chưa rep cho nhân viên thấy), (2) ghi nhật ký,
+   * (3) báo Telegram chủ shop theo mẫu của skill.
+   */
+  const handoff = async (reason: string, reply: string | null, urgent: boolean): Promise<EvaluateResult> => {
+    const say = reply?.trim() ? applyGuards(reply, customerText) : null;
+    const live = !test && cfg.mode === 'auto';
+    if (say && live) {
+      try {
+        await sendReply(orgId, convInfo, say, { markReplied: false });
+      } catch (err: any) {
+        logger.warn(`[ai-auto-reply] gửi câu báo chuyển người lỗi: ${err?.message ?? err}`);
+      }
+    }
+    await log(lastPending.id, 'handoff', reason || 'AI chuyển người', say, Date.now() - started, customerText);
+    if (!test && cfg.notifyHandoff) {
+      const [contact, acc] = await Promise.all([
+        conv.contactId
+          ? prisma.contact.findUnique({ where: { id: conv.contactId }, select: { fullName: true, crmName: true, phone: true } })
+          : null,
+        prisma.zaloAccount.findUnique({ where: { id: conv.zaloAccountId }, select: { displayName: true } }),
+      ]);
+      void notifyHandoff({
+        conversationId,
+        nickName: acc?.displayName || 'Zalo',
+        customerName: contact?.crmName || contact?.fullName || 'Khách',
+        customerPhone: contact?.phone,
+        urgent,
+        reason,
+        customerText,
+        botReply: say && live ? say : null,
+        dryRun: cfg.mode === 'dry_run',
+      }, { chatId: cfg.handoffChatId, pauseMinutes: cfg.handoffPauseMinutes });
+    }
+    return { decision: 'handoff', reason, content: say ?? undefined };
+  };
+
   const blocked = matchesAnyKeyword(customerText, cfg.blockedKeywords);
-  if (blocked) {
-    await log(lastPending.id, 'handoff', `từ khoá cần người thật: "${blocked}"`);
-    return { decision: 'handoff', reason: `từ khoá "${blocked}"` };
-  }
+  if (blocked) return handoff(`KHẨN · khách nhắc tới "${blocked}"`, null, true);
 
   const { start: dayStart } = orgDayRange(now, org?.timezone);
   const [nickToday, convToday] = await Promise.all([
@@ -244,15 +319,32 @@ export async function evaluateConversation(
     return { decision: 'error', reason: 'thiếu khoá AI' };
   }
 
-  // Tài liệu tham khảo của skill: file "luôn dùng" + file khớp chủ đề câu khách hỏi
-  // (các tin khách đang chờ trả lời).
+  // Tài liệu tham khảo của skill: file "luôn dùng" + file khớp chủ đề câu khách hỏi.
   const references = pickGuideFiles(cfg.guideFiles ?? [], customerText);
+  // Xưng hô theo giới tính Zalo của khách (nữ → chị, nam → anh).
+  const addressing = cfg.addressByGender
+    ? { selfPronoun: cfg.selfPronoun || 'em', gender: await resolveCustomerGender(conv) }
+    : null;
   // Vòng tự học: bài học đang bật của nick này.
   const lessons = cfg.learningEnabled ? (await activeLessons(conv.zaloAccountId)).map((l) => l.content) : [];
   const ctx = await buildAutoReplyContext({ orgId, conversationId, zaloAccountId: conv.zaloAccountId, contactId: conv.contactId, pendingCustomerText: customerText, tags });
+
+  // Tra kho thật (bot-noi-bo): AI tách từ khoá sản phẩm → tìm hàng còn tồn + giá theo mức.
+  let products: CatalogProduct[] = [];
+  if (cfg.useProductCatalog && isCatalogEnabled()) {
+    const queries = await extractProductQueries({ provider: ai.provider, apiKey, model: ai.model }, customerText, ctx.history);
+    if (queries.length) {
+      products = await searchProducts(queries, 8).catch((err) => {
+        logger.warn(`[ai-auto-reply] tra kho lỗi: ${err?.message ?? err}`);
+        return [];
+      });
+    }
+  }
+  const productsBlock = renderProducts(products);
+
   let raw: string;
   try {
-    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references), renderUserPrompt(ctx), 900);
+    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references, addressing, productsBlock), renderUserPrompt(ctx), 1000);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
     return { decision: 'error', reason: 'gọi AI lỗi' };
@@ -262,16 +354,14 @@ export async function evaluateConversation(
     await log(lastPending.id, 'error', 'AI trả về không đúng định dạng', raw.slice(0, 1000));
     return { decision: 'error', reason: 'AI trả sai định dạng' };
   }
-  if (decision.action === 'handoff') {
-    await log(lastPending.id, 'handoff', decision.reason || 'AI chuyển nhân viên', null, Date.now() - started);
-    return { decision: 'handoff', reason: decision.reason };
-  }
+  if (decision.action === 'handoff') return handoff(decision.reason, decision.reply, decision.urgent);
 
   let text = applyGuards(decision.reply, customerText);
   if (cfg.verifyGrounding) {
     const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx)
       + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
       + (references.length ? `\n\n${renderReferences(references)}` : '')
+      + (productsBlock ? `\n\n${productsBlock}` : '')
       + (lessons.length ? `\n\n<bai_hoc>\n${lessons.map((l) => `- ${l}`).join('\n')}\n</bai_hoc>` : '') });
     if (!checked) {
       await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
@@ -283,6 +373,12 @@ export async function evaluateConversation(
     await log(lastPending.id, 'error', 'tin sau lớp chặn bị rỗng');
     return { decision: 'error', reason: 'tin rỗng' };
   }
+
+  // Ảnh sản phẩm AI muốn gửi kèm (chỉ id có trong kết quả tra kho, có ảnh).
+  const imageProducts = cfg.sendProductImages
+    ? decision.productIds.map((id) => products.find((p) => p.id === id)).filter((p): p is CatalogProduct => !!p?.thumbnail).slice(0, 3)
+    : [];
+  const logText = imageProducts.length ? `${text}\n[Gửi ảnh: ${imageProducts.map((p) => p.name).join(', ')}]` : text;
 
   // Soát lần cuối: trong lúc AI nghĩ, nhân viên đã trả lời hoặc khách nhắn thêm?
   const newest = await prisma.message.findFirst({
@@ -297,26 +393,73 @@ export async function evaluateConversation(
   }
 
   const latency = Date.now() - started;
+  const productNote = products.length ? ` · tra kho ${products.length} món` : '';
   if (cfg.mode === 'dry_run' || test) {
-    await log(lastPending.id, 'dry_run', `thẻ "${trigger}" · ${decision.reason}`, text, latency, customerText);
-    return { decision: 'dry_run', reason: decision.reason, content: text };
+    await log(lastPending.id, 'dry_run', `thẻ "${trigger}"${productNote} · ${decision.reason}`, logText, latency, customerText);
+    return { decision: 'dry_run', reason: decision.reason, content: logText };
   }
 
   try {
-    await sendReply(orgId, conv as { id: string; zaloAccountId: string; externalThreadId: string; contactId: string | null }, text);
+    await sendReply(orgId, convInfo, text);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gửi Zalo lỗi: ${err?.code ?? ''} ${err?.message ?? err}`, text, latency);
     return { decision: 'error', reason: 'gửi lỗi' };
   }
-  await log(lastPending.id, 'sent', `thẻ "${trigger}" · ${decision.reason}`, text, latency, customerText);
+  if (imageProducts.length) {
+    const api = zaloPool.getInstance(conv.zaloAccountId)?.api;
+    if (api) {
+      await sendToThread(api, orgId, conv.zaloAccountId, convInfo.externalThreadId, 0, '', imageProducts.map((p) => p.thumbnail!))
+        .catch((err) => logger.warn(`[ai-auto-reply] gửi ảnh sản phẩm lỗi: ${err?.message ?? err}`));
+    }
+  }
+  await log(lastPending.id, 'sent', `thẻ "${trigger}"${productNote} · ${decision.reason}`, logText, latency, customerText);
   logger.info(`[ai-auto-reply] đã trả lời conv=${conversationId} (${latency}ms)`);
-  return { decision: 'sent', reason: decision.reason, content: text };
+  return { decision: 'sent', reason: decision.reason, content: logText };
+}
+
+/**
+ * Lượt AI nhỏ: tách từ khoá sản phẩm khách đang hỏi (xét cả vài tin gần nhất để
+ * hiểu "loại nào", "cái đó"). Không liên quan sản phẩm → []. Lỗi → [].
+ */
+export async function extractProductQueries(
+  ai: { provider: string; apiKey: string; model: string },
+  customerText: string,
+  history: string[],
+): Promise<ProductQuery[]> {
+  const system = [
+    'Bạn tách TỪ KHOÁ TÌM SẢN PHẨM trong kho của một cửa hàng (gia dụng, mỹ phẩm, ăn vặt, đồ chơi…) từ tin nhắn khách.',
+    'Trả DUY NHẤT JSON: {"queries": [{"name": "tên loại sản phẩm ngắn gọn như trên nhãn, 1-4 từ, có dấu", "hints": ["đặc điểm khách muốn: giới tính, mùi, màu, dung tích, công dụng…"]}]}',
+    'Tối đa 3 truy vấn, từ cụ thể đến chung (vd "nước hoa nữ" rồi "nước hoa"). Dùng lịch sử để hiểu khách đang nói về món nào.',
+    'Tin không hỏi về sản phẩm (chào, cảm ơn, hỏi giờ mở cửa, địa chỉ, khiếu nại…) → {"queries": []}.',
+  ].join('\n');
+  const prompt = ['<lich_su_gan_day>', ...history.slice(-6), '</lich_su_gan_day>', '<tin_khach>', customerText.slice(0, 800), '</tin_khach>'].join('\n');
+  try {
+    const raw = await generateText(ai.provider, ai.apiKey, ai.model, system, prompt, 250);
+    let t = raw.trim();
+    const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fence) t = fence[1].trim();
+    const a = t.indexOf('{');
+    const b = t.lastIndexOf('}');
+    if (a === -1 || b <= a) return [];
+    const parsed = JSON.parse(t.slice(a, b + 1)) as { queries?: unknown };
+    if (!Array.isArray(parsed.queries)) return [];
+    return parsed.queries
+      .filter((q): q is { name: string; hints?: unknown } => !!q && typeof (q as any).name === 'string' && (q as any).name.trim().length >= 2)
+      .slice(0, 3)
+      .map((q) => ({
+        name: q.name.trim().slice(0, 60),
+        hints: Array.isArray(q.hints) ? q.hints.filter((h): h is string => typeof h === 'string').slice(0, 5) : [],
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function sendReply(
   orgId: string,
   conv: { id: string; zaloAccountId: string; externalThreadId: string; contactId: string | null },
   text: string,
+  opts: { markReplied?: boolean } = {},
 ): Promise<void> {
   const raw = await zaloOps.sendMessage(conv.zaloAccountId, conv.externalThreadId, 0, { msg: text }) as
     { message?: { msgId?: number | string } | null; msgId?: number | string } | null;
@@ -339,7 +482,8 @@ async function sendReply(
   });
   await prisma.conversation.update({
     where: { id: conv.id },
-    data: { lastMessageAt: sentAt, isReplied: true, unreadCount: 0 },
+    // Chuyển người: vẫn để "chưa rep" để nhân viên thấy mà vào xử lý.
+    data: opts.markReplied === false ? { lastMessageAt: sentAt } : { lastMessageAt: sentAt, isReplied: true, unreadCount: 0 },
   }).catch(() => {});
   const aggInput = {
     conversationId: conv.id,

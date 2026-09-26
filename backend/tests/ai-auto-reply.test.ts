@@ -106,7 +106,9 @@ describe('guardrails', () => {
 
   it('parseDecision đọc JSON trong code fence; reply rỗng → handoff', () => {
     expect(guards.parseDecision('```json\n{"action":"reply","reply":"Dạ còn ạ","reason":"x"}\n```'))
-      .toEqual({ action: 'reply', reply: 'Dạ còn ạ', reason: 'x' });
+      .toEqual({ action: 'reply', reply: 'Dạ còn ạ', reason: 'x', productIds: [], urgent: false });
+    expect(guards.parseDecision('{"action":"handoff","reply":"Dạ em ghi nhận ạ","reason":"KHẨN · khách bực","productIds":[5,"7",-1,8,9]}'))
+      .toMatchObject({ action: 'handoff', reply: 'Dạ em ghi nhận ạ', urgent: true, productIds: [5, 7, 8] });
     expect(guards.parseDecision('{"action":"reply","reply":""}')?.action).toBe('handoff');
     expect(guards.parseDecision('không phải json')).toBeNull();
   });

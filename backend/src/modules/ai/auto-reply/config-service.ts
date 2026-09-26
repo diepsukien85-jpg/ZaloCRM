@@ -46,6 +46,16 @@ export type AutoReplyProfile = {
   /** Tài liệu tham khảo của skill: luôn dùng / tự chọn theo câu hỏi / không dùng. */
   guideFiles: GuideFile[];
   verifyGrounding: boolean;
+  /** Xưng hô theo giới tính Zalo: nữ → chị, nam → anh (AI tự xưng selfPronoun). */
+  addressByGender: boolean;
+  selfPronoun: string;
+  /** Tra kho sản phẩm bot-noi-bo để tư vấn cụ thể; gửi kèm ảnh sản phẩm. */
+  useProductCatalog: boolean;
+  sendProductImages: boolean;
+  /** Chuyển người → báo Telegram (chat id riêng nick, null = mặc định server). */
+  notifyHandoff: boolean;
+  handoffChatId: string | null;
+  handoffPauseMinutes: number;
   /** Vòng tự học: rút bài học từ kết quả trả lời + phản hồi của chủ shop. */
   learningEnabled: boolean;
   lastLearnedAt: string | null;
@@ -92,6 +102,13 @@ function normalize(row: Row): AutoReplyProfile {
     extraInstruction: row.extraInstruction,
     guideFileName: row.guideFileName,
     guideFiles: normalizeGuideFiles(row.guideFiles),
+    addressByGender: row.addressByGender,
+    selfPronoun: row.selfPronoun,
+    useProductCatalog: row.useProductCatalog,
+    sendProductImages: row.sendProductImages,
+    notifyHandoff: row.notifyHandoff,
+    handoffChatId: row.handoffChatId,
+    handoffPauseMinutes: row.handoffPauseMinutes,
     learningEnabled: row.learningEnabled,
     lastLearnedAt: row.lastLearnedAt ? row.lastLearnedAt.toISOString() : null,
     verifyGrounding: row.verifyGrounding,
@@ -104,7 +121,8 @@ export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
     zaloAccountId, enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22,
     debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10,
     blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, guideFileName: null, guideFiles: [], verifyGrounding: true,
-    learningEnabled: true, lastLearnedAt: null,
+    addressByGender: true, selfPronoun: 'em', learningEnabled: true, lastLearnedAt: null,
+    useProductCatalog: true, sendProductImages: true, notifyHandoff: true, handoffChatId: null, handoffPauseMinutes: 60,
   };
 }
 
@@ -159,6 +177,13 @@ export function validateProfileInput(input: ProfileInput): string | null {
   }
   if (input.verifyGrounding !== undefined && typeof input.verifyGrounding !== 'boolean') return 'verifyGrounding phải là true/false';
   if (input.learningEnabled !== undefined && typeof input.learningEnabled !== 'boolean') return 'learningEnabled phải là true/false';
+  if (input.addressByGender !== undefined && typeof input.addressByGender !== 'boolean') return 'addressByGender phải là true/false';
+  for (const k of ['useProductCatalog', 'sendProductImages', 'notifyHandoff'] as const) {
+    if (input[k] !== undefined && typeof input[k] !== 'boolean') return `${k} phải là true/false`;
+  }
+  if (input.handoffChatId != null && (typeof input.handoffChatId !== 'string' || !/^-?\d{3,20}$/.test(input.handoffChatId.trim()) && input.handoffChatId.trim() !== '')) return 'Telegram chat id phải là số';
+  if (input.handoffPauseMinutes !== undefined && !int(input.handoffPauseMinutes, 0, 1440)) return 'Thời gian không báo lại phải từ 0 đến 1440 phút';
+  if (input.selfPronoun !== undefined && (typeof input.selfPronoun !== 'string' || !input.selfPronoun.trim() || input.selfPronoun.length > 30)) return 'Tự xưng phải có 1-30 ký tự';
   return null;
 }
 
@@ -180,6 +205,13 @@ export async function saveProfile(orgId: string, zaloAccountId: string, input: P
     guideFiles: input.guideFiles === undefined ? undefined : normalizeGuideFiles(input.guideFiles),
     verifyGrounding: input.verifyGrounding,
     learningEnabled: input.learningEnabled,
+    addressByGender: input.addressByGender,
+    selfPronoun: input.selfPronoun?.trim(),
+    useProductCatalog: input.useProductCatalog,
+    sendProductImages: input.sendProductImages,
+    notifyHandoff: input.notifyHandoff,
+    handoffChatId: input.handoffChatId === undefined ? undefined : (input.handoffChatId?.trim() || null),
+    handoffPauseMinutes: input.handoffPauseMinutes,
   };
   const row = await prisma.aiAutoReplyProfile.upsert({
     where: { zaloAccountId },

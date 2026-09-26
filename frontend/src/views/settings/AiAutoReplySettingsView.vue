@@ -221,6 +221,62 @@
               </v-alert>
             </template>
 
+            <!-- Xưng hô theo giới tính Zalo -->
+            <div class="aar-step mt-5">Xưng hô với khách</div>
+            <div class="aar-row">
+              <v-switch
+                v-model="form.addressByGender"
+                color="success"
+                base-color="grey-darken-1"
+                inset
+                hide-details
+                label="Gọi theo giới tính Zalo (nữ → chị, nam → anh)"
+              />
+              <v-text-field v-model="form.selfPronoun" label="AI tự xưng" density="compact" hide-details style="max-width: 160px;" />
+            </div>
+            <p class="aar-hint">
+              Bật: AI đọc giới tính trên Zalo của khách, nữ thì gọi "chị", nam thì gọi "anh", tự xưng "{{ form.selfPronoun || 'em' }}";
+              chưa rõ thì gọi "anh/chị". Quy tắc này đứng trên phần xưng hô trong hướng dẫn / skill.
+            </p>
+
+            <!-- Tư vấn từ kho sản phẩm thật -->
+            <div class="aar-step mt-5">Tư vấn sản phẩm từ kho</div>
+            <v-alert v-if="!server.catalog" type="warning" variant="tonal" density="compact" class="mb-2">
+              Server chưa nối kho sản phẩm bot-noi-bo (BOT_NOIBO_RO_DB_URL) — AI chưa tra được giá/tồn kho.
+            </v-alert>
+            <div class="aar-row">
+              <v-switch v-model="form.useProductCatalog" color="success" base-color="grey-darken-1" inset hide-details
+                label="Tra kho thật (giá lẻ / CTV / NPP, tồn kho, mô tả) để tư vấn cụ thể" />
+              <v-switch v-model="form.sendProductImages" color="success" base-color="grey-darken-1" inset hide-details
+                :disabled="!form.useProductCatalog" label="Gửi kèm ảnh sản phẩm (tối đa 3)" />
+            </div>
+            <p class="aar-hint">
+              Khi khách hỏi món hàng, AI tìm trong kho bot-noi-bo các món <strong>còn hàng</strong> khớp nhu cầu, gợi ý 2-3 mẫu với giá thật.
+              Giá CTV / NPP chỉ nêu khi khách hỏi giá sỉ. Không bao giờ nêu giá vốn.
+            </p>
+
+            <!-- Chuyển người + thông báo -->
+            <div class="aar-step mt-5 d-flex align-center flex-wrap" style="gap: 8px;">
+              Chuyển người & thông báo Telegram
+              <v-spacer />
+              <v-btn v-if="isAdmin && server.telegram" size="small" variant="tonal" prepend-icon="mdi-send" :loading="testingTg" @click="testTelegram">Gửi thử</v-btn>
+            </div>
+            <v-alert v-if="!server.telegram" type="warning" variant="tonal" density="compact" class="mb-2">
+              Server chưa cấu hình bot Telegram (HANDOFF_TELEGRAM_BOT_TOKEN) — chưa báo được khi chuyển người.
+            </v-alert>
+            <div class="aar-row">
+              <v-switch v-model="form.notifyHandoff" color="success" base-color="grey-darken-1" inset hide-details
+                label="Báo Telegram khi AI chuyển khách cho người thật" />
+              <v-text-field v-model="form.handoffChatId" density="compact" hide-details style="max-width: 220px;"
+                label="Telegram chat id" :placeholder="server.defaultChatId ? `mặc định ${server.defaultChatId}` : ''" />
+              <v-text-field v-model.number="form.handoffPauseMinutes" type="number" min="0" density="compact" hide-details style="max-width: 200px;"
+                label="Không báo lại cùng khách (phút)" />
+            </div>
+            <p class="aar-hint">
+              Khi chuyển người, AI vẫn nói một câu với khách (vd "em ghi nhận rồi, anh Mẫn sẽ nhắn lại"), hội thoại giữ ở "Chưa rep",
+              và gửi Telegram theo mẫu: mức KHẨN/THƯỜNG, khách, lý do, tin khách nhắn, link hội thoại. Để trống chat id = dùng chat mặc định của server.
+            </p>
+
             <!-- Hướng dẫn cho AI (skill) — viết tay hoặc tải file -->
             <div class="aar-step mt-5 d-flex align-center flex-wrap" style="gap: 8px;">
               Hướng dẫn cho AI của nick này
@@ -477,6 +533,9 @@ interface Profile {
   persona: string | null; extraInstruction: string | null; guideFileName: string | null; verifyGrounding: boolean;
   guideFiles: GuideFile[];
   learningEnabled: boolean; lastLearnedAt: string | null;
+  addressByGender: boolean; selfPronoun: string;
+  useProductCatalog: boolean; sendProductImages: boolean;
+  notifyHandoff: boolean; handoffChatId: string | null; handoffPauseMinutes: number;
 }
 interface ProfileCard extends Profile {
   accountName: string; accountStatus: string; today: Record<string, number>;
@@ -555,7 +614,23 @@ const form = reactive<Omit<Profile, 'zaloAccountId'>>({
   maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10, blockedKeywords: [],
   persona: null, extraInstruction: '', guideFileName: null, guideFiles: [], verifyGrounding: true,
   learningEnabled: true, lastLearnedAt: null,
+  addressByGender: true, selfPronoun: 'em',
+  useProductCatalog: true, sendProductImages: true, notifyHandoff: true, handoffChatId: null, handoffPauseMinutes: 60,
 });
+const server = ref<{ catalog: boolean; telegram: boolean; defaultChatId: string | null }>({ catalog: false, telegram: false, defaultChatId: null });
+const testingTg = ref(false);
+async function testTelegram() {
+  if (!editingAccountId.value) return;
+  testingTg.value = true;
+  try {
+    await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/test-telegram`, { chatId: form.handoffChatId || undefined });
+    toast.success('Đã gửi tin thử. Kiểm tra Telegram nhé.');
+  } catch (err) {
+    toast.error(errorText(err, 'Gửi thử lỗi'));
+  } finally {
+    testingTg.value = false;
+  }
+}
 
 // ── Vòng tự học ──
 const lessons = ref<Lesson[]>([]);
@@ -822,6 +897,7 @@ async function loadProfiles() {
   const { data } = await api.get('/ai/auto-reply/profiles');
   profiles.value = data.profiles;
   accounts.value = data.accounts;
+  if (data.server) server.value = data.server;
 }
 async function loadPlaybook() {
   playbook.value = (await api.get('/ai/auto-reply/playbook')).data.entries;

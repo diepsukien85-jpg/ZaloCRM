@@ -93,7 +93,16 @@ export function enforceNoCredentials(reply: string): { text: string; fixed: bool
 }
 
 /* ── Đọc JSON mô hình trả về ─────────────────────────────────────────── */
-export type AiDecision = { action: 'reply' | 'handoff'; reply: string; reason: string };
+export type AiDecision = {
+  action: 'reply' | 'handoff';
+  /** Tin gửi khách. Với handoff: câu báo khách trước khi chuyển (có thể rỗng). */
+  reply: string;
+  reason: string;
+  /** Sản phẩm (id trong kho) muốn gửi ảnh kèm, tối đa 3. */
+  productIds: number[];
+  /** Handoff khẩn (khách bực, khiếu nại, mạo danh chuyển khoản, pháp lý). */
+  urgent: boolean;
+};
 
 export function parseDecision(raw: string): AiDecision | null {
   let text = raw.trim();
@@ -107,7 +116,10 @@ export function parseDecision(raw: string): AiDecision | null {
     const reply = typeof p.reply === 'string' ? p.reply.trim() : '';
     const reason = typeof p.reason === 'string' ? p.reason : '';
     const action = p.action === 'handoff' || !reply ? 'handoff' : 'reply';
-    return { action, reply, reason };
+    const productIds = (Array.isArray(p.productIds) ? p.productIds : [])
+      .map((x) => Number(x)).filter((x) => Number.isInteger(x) && x > 0).slice(0, 3);
+    const urgent = p.urgent === true || /\bkhan\b/.test(fold(reason).slice(0, 12));
+    return { action, reply, reason, productIds, urgent };
   } catch {
     return null;
   }

@@ -209,7 +209,19 @@ export function renderReferences(files: GuideFile[]): string {
   return ['<tai_lieu_tham_khao>', ...files.map((f) => `### ${f.path}\n${f.content.replace(/<\/?tai_lieu_tham_khao>/g, '')}`), '</tai_lieu_tham_khao>'].join('\n');
 }
 
-export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = [], references: GuideFile[] = []): string {
+/** Cách gọi khách theo giới tính Zalo. */
+export type Addressing = { selfPronoun: string; gender: 'male' | 'female' | null } | null;
+
+export function addressingRule(a: Addressing): string | null {
+  if (!a) return null;
+  const self = a.selfPronoun.trim() || 'em';
+  const call = a.gender === 'female' ? 'chị' : a.gender === 'male' ? 'anh' : null;
+  return call
+    ? `XƯNG HÔ BẮT BUỘC: khách là ${a.gender === 'female' ? 'NỮ' : 'NAM'} (theo hồ sơ Zalo) → gọi khách là "${call}", tự xưng "${self}". Ví dụ: "Dạ ${self} chào ${call} ạ". Không gọi "anh chị", "bạn", "quý khách". Quy tắc này đứng trên phần xưng hô trong HƯỚNG DẪN CỦA SHOP (nói về công ty vẫn dùng tên shop như hướng dẫn).`
+    : `XƯNG HÔ BẮT BUỘC: chưa rõ giới tính khách → gọi khách là "anh/chị", tự xưng "${self}". Nếu khách tự xưng rõ (vd "chị hỏi", "anh muốn") thì gọi theo đó. Quy tắc này đứng trên phần xưng hô trong HƯỚNG DẪN CỦA SHOP.`;
+}
+
+export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = [], references: GuideFile[] = [], addressing: Addressing = null, products = ''): string {
   const g = guide?.trim() || '';
   const who = persona?.trim()
     || (g ? 'người trả lời khách của shop, đóng vai, xưng hô và tư vấn đúng như HƯỚNG DẪN CỦA SHOP ở cuối' : 'nhân viên chăm sóc khách hàng của shop, xưng "em", gọi khách là "anh/chị"');
@@ -225,11 +237,26 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
     '- Không chào lại từ đầu nếu hai bên đang giữa cuộc trò chuyện.',
     '- KHÔNG BAO GIỜ nhận là người thật. Khách hỏi thẳng có phải bot/AI không thì phải nói thật. Được tự giới thiệu là trợ lý AI nếu HƯỚNG DẪN CỦA SHOP yêu cầu; nếu hướng dẫn không nói gì thì không cần tự nhắc.',
     '- Không yêu cầu khách gửi mật khẩu, mã OTP, thông tin thẻ.',
-    '- Chọn "handoff" (KHÔNG trả lời) khi: khách bức xúc, khiếu nại, đòi hoàn tiền/đổi trả; câu hỏi cần xem đơn hàng, công nợ hay thông tin không có trong ngữ cảnh mà không thể trả lời an toàn; khách muốn gặp người thật; tin chỉ là sticker/ảnh/lời cảm ơn không cần đáp.',
+    '- Chọn "handoff" (chuyển chủ shop xử lý) khi: khách bức xúc, khiếu nại, đòi hoàn tiền/đổi trả; khách muốn gặp người thật; việc cần chủ shop quyết (giá đặc biệt, công nợ, hoá đơn VAT, phí giao ngoài vùng…) hoặc thông tin không có trong ngữ cảnh; và các trường hợp HƯỚNG DẪN CỦA SHOP yêu cầu chuyển. Khi handoff, "reply" là MỘT câu ngắn báo khách đã ghi nhận và chủ shop sẽ nhắn lại (không hứa nhanh hơn hướng dẫn cho phép); để rỗng nếu không cần nói gì (vd tin chỉ là sticker).',
+    '- Tin chỉ là lời cảm ơn / sticker không cần đáp: action "reply" với câu đáp rất ngắn, hoặc handoff với reply rỗng nếu không cần nói gì.',
+    '',
+    ...(addressingRule(addressing) ? ['', addressingRule(addressing)!] : []),
     '',
     'Trả về DUY NHẤT một JSON, không kèm chữ nào khác:',
-    '{"action": "reply" | "handoff", "reply": "tin gửi khách (rỗng nếu handoff)", "reason": "một câu ngắn giải thích"}',
+    '{"action": "reply" | "handoff", "reply": "tin gửi khách", "reason": "một câu ngắn giải thích (với handoff: viết theo khung lý do của hướng dẫn nếu có)", "urgent": true|false, "productIds": [id sản phẩm muốn gửi ảnh, tối đa 3]}',
   ];
+  if (products) {
+    lines.push(
+      '',
+      'SẢN PHẨM TRONG KHO (tra từ hệ thống bán hàng ngay lúc này — nguồn giá/tồn kho chính xác nhất):',
+      '- Khách hỏi mua / tìm món: TƯ VẤN CỤ THỂ từ danh sách này: gợi ý 2-3 mẫu hợp nhu cầu nhất, nêu tên + giá lẻ + điểm nổi bật ngắn (lấy từ mô tả). Không trả lời chung chung kiểu "bên em có nhiều loại".',
+      '- Chỉ nêu giá CTV/NPP khi khách hỏi giá sỉ hoặc số lượng nhiều (theo đúng ngưỡng ghi trong danh sách). Không bao giờ nêu giá vốn.',
+      '- Chỉ nói về sản phẩm có trong danh sách; không bịa món, không bịa giá, không hứa còn hàng số lượng lớn nếu tồn ít. Món "GẦN ĐÚNG" thì nói rõ kho chưa có đúng món khách hỏi rồi mới gợi ý món liên quan.',
+      '- Muốn khách xem ảnh: điền id vào "productIds" (tối đa 3); hệ thống tự gửi ảnh sau tin nhắn, trong tin chỉ cần nói "gửi ảnh để anh/chị xem".',
+      '- Danh sách rỗng hoặc không có món phù hợp: nói sẽ kiểm tra lại và báo khách, hỏi thêm nhu cầu; KHÔNG bịa.',
+      products,
+    );
+  }
   if (g) {
     lines.push(
       '',

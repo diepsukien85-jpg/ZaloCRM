@@ -162,3 +162,23 @@ export function updateContactAvatar(zaloUid: string, avatarUrl: string): void {
     })
     .catch(() => {});
 }
+
+/** Giới tính Zalo (0 = nam, 1 = nữ) → giá trị Contact.gender. Giá trị lạ → null. */
+export function zaloGender(v: unknown): 'male' | 'female' | null {
+  const n = Number(v);
+  if (v === null || v === undefined || v === '' || Number.isNaN(n)) return null;
+  return n === 1 ? 'female' : n === 0 ? 'male' : null;
+}
+
+/**
+ * Ghi giới tính Zalo vào hồ sơ khách khi CHƯA có (không ghi đè giới tính sale
+ * đã sửa tay). Fire-and-forget. AI tự trả lời dùng để gọi "anh" / "chị".
+ */
+export function updateContactGender(zaloUid: string, gender: 'male' | 'female'): void {
+  prisma.contact
+    .updateMany({
+      where: { zaloUid, OR: [{ gender: null }, { gender: '' }, { gender: 'unknown' }] },
+      data: { gender },
+    })
+    .catch(() => {});
+}
