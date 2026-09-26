@@ -13,8 +13,14 @@ export const DEFAULT_BLOCKED_KEYWORDS = [
   'công an', 'báo chí', 'tố cáo', 'bồi thường', 'bóc phốt', 'huỷ đơn', 'hủy đơn',
 ];
 
-/** Trần độ dài hướng dẫn (skill) — đủ cho một file SKILL.md dài, vẫn giữ prompt vừa phải. */
-export const GUIDE_MAX_CHARS = 20000;
+/** Trần độ dài hướng dẫn chính (SKILL.md) — luôn nằm trong prompt. */
+export const GUIDE_MAX_CHARS = 30000;
+/** Tài liệu tham khảo của skill (references/*.md). */
+export const GUIDE_FILES_MAX = 30;
+export const GUIDE_FILE_MAX_CHARS = 40000;
+export const GUIDE_FILES_TOTAL_MAX_CHARS = 200000;
+export type GuideFileMode = 'always' | 'auto' | 'off';
+export type GuideFile = { path: string; content: string; mode: GuideFileMode };
 
 export type AutoReplyMode = 'auto' | 'dry_run';
 
@@ -37,6 +43,8 @@ export type AutoReplyProfile = {
   extraInstruction: string | null;
   /** Tên file skill đã tải lên (null nếu viết tay). */
   guideFileName: string | null;
+  /** Tài liệu tham khảo của skill: luôn dùng / tự chọn theo câu hỏi / không dùng. */
+  guideFiles: GuideFile[];
   verifyGrounding: boolean;
   /** Vòng tự học: rút bài học từ kết quả trả lời + phản hồi của chủ shop. */
   learningEnabled: boolean;
@@ -47,6 +55,19 @@ export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId' | 'las
 const CACHE_MS = 30_000;
 /** zaloAccountId → profile (null = nick chưa cấu hình). */
 const cache = new Map<string, { at: number; value: AutoReplyProfile | null }>();
+
+export function normalizeGuideFiles(v: unknown): GuideFile[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((f): f is Record<string, unknown> => !!f && typeof f === 'object')
+    .filter((f) => typeof f.path === 'string' && typeof f.content === 'string')
+    .map((f) => ({
+      path: String(f.path).trim(),
+      content: String(f.content).replace(/\r\n/g, '\n').trim(),
+      mode: (['always', 'auto', 'off'].includes(f.mode as string) ? f.mode : 'auto') as GuideFileMode,
+    }))
+    .filter((f) => f.path && f.content);
+}
 
 function strArr(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
@@ -70,6 +91,7 @@ function normalize(row: Row): AutoReplyProfile {
     persona: row.persona,
     extraInstruction: row.extraInstruction,
     guideFileName: row.guideFileName,
+    guideFiles: normalizeGuideFiles(row.guideFiles),
     learningEnabled: row.learningEnabled,
     lastLearnedAt: row.lastLearnedAt ? row.lastLearnedAt.toISOString() : null,
     verifyGrounding: row.verifyGrounding,
@@ -81,7 +103,7 @@ export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
   return {
     zaloAccountId, enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22,
     debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10,
-    blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, guideFileName: null, verifyGrounding: true,
+    blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, guideFileName: null, guideFiles: [], verifyGrounding: true,
     learningEnabled: true, lastLearnedAt: null,
   };
 }
@@ -122,6 +144,19 @@ export function validateProfileInput(input: ProfileInput): string | null {
   if (input.persona != null && input.persona.length > 1000) return 'Vai trò / xưng hô tối đa 1000 ký tự';
   if (input.extraInstruction != null && input.extraInstruction.length > GUIDE_MAX_CHARS) return `Hướng dẫn cho AI tối đa ${GUIDE_MAX_CHARS.toLocaleString('vi-VN')} ký tự`;
   if (input.guideFileName != null && (typeof input.guideFileName !== 'string' || input.guideFileName.length > 200)) return 'Tên file hướng dẫn không hợp lệ';
+  if (input.guideFiles !== undefined) {
+    if (!Array.isArray(input.guideFiles)) return 'Tài liệu tham khảo không hợp lệ';
+    if (input.guideFiles.length > GUIDE_FILES_MAX) return `Tối đa ${GUIDE_FILES_MAX} tài liệu tham khảo`;
+    let total = 0;
+    for (const f of input.guideFiles) {
+      if (!f || typeof f.path !== 'string' || !f.path.trim() || f.path.length > 300) return 'Tên tài liệu không hợp lệ';
+      if (typeof f.content !== 'string') return `Nội dung tài liệu "${f.path}" không hợp lệ`;
+      if (f.content.length > GUIDE_FILE_MAX_CHARS) return `Tài liệu "${f.path}" dài quá ${GUIDE_FILE_MAX_CHARS.toLocaleString('vi-VN')} ký tự`;
+      if (!['always', 'auto', 'off'].includes(f.mode)) return `Chế độ của tài liệu "${f.path}" không hợp lệ`;
+      total += f.content.length;
+    }
+    if (total > GUIDE_FILES_TOTAL_MAX_CHARS) return `Tổng tài liệu tham khảo vượt ${GUIDE_FILES_TOTAL_MAX_CHARS.toLocaleString('vi-VN')} ký tự`;
+  }
   if (input.verifyGrounding !== undefined && typeof input.verifyGrounding !== 'boolean') return 'verifyGrounding phải là true/false';
   if (input.learningEnabled !== undefined && typeof input.learningEnabled !== 'boolean') return 'learningEnabled phải là true/false';
   return null;
@@ -142,6 +177,7 @@ export async function saveProfile(orgId: string, zaloAccountId: string, input: P
     persona: input.persona === undefined ? undefined : (input.persona?.trim() || null),
     extraInstruction: input.extraInstruction === undefined ? undefined : (input.extraInstruction?.trim() || null),
     guideFileName: input.guideFileName === undefined ? undefined : (input.guideFileName?.trim() || null),
+    guideFiles: input.guideFiles === undefined ? undefined : normalizeGuideFiles(input.guideFiles),
     verifyGrounding: input.verifyGrounding,
     learningEnabled: input.learningEnabled,
   };

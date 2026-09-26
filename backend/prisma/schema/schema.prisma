@@ -2347,6 +2347,9 @@ model AiAutoReplyProfile {
   // Hướng dẫn cho AI (skill): vai trò, xưng hô, cách tư vấn… — viết tay hoặc tải file .md/.txt.
   extraInstruction            String?  @map("extra_instruction") @db.Text
   guideFileName               String?  @map("guide_file_name") // tên file skill đã tải lên (nếu có)
+  // Tài liệu tham khảo của skill (references/*.md trong file .skill):
+  // [{ path, content, mode: 'always' | 'auto' | 'off' }] — 'auto' = chỉ nạp khi liên quan câu khách hỏi.
+  guideFiles                  Json     @default("[]") @map("guide_files")
   // Vòng tự học: rút bài học từ kết quả mỗi lượt trả lời + phản hồi của chủ shop.
   learningEnabled             Boolean  @default(true) @map("learning_enabled")
   lastLearnedAt               DateTime? @map("last_learned_at")

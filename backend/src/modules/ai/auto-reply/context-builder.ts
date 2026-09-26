@@ -9,7 +9,8 @@
  * Cắt ngắn có kiểm soát: prompt dài vừa đắt vừa dễ khiến AI bịa.
  */
 import { prisma } from '../../../shared/database/prisma-client.js';
-import { clip, matchesAnyKeyword } from './guardrails.js';
+import { clip, fold, matchesAnyKeyword } from './guardrails.js';
+import type { GuideFile } from './config-service.js';
 
 const HISTORY_LIMIT = 20;
 const PLAYBOOK_LIMIT = 8;
@@ -112,7 +113,103 @@ export async function buildAutoReplyContext(input: {
   return { customer, history, pendingCustomerText: clip(pendingCustomerText, 1200), playbook, templates };
 }
 
-export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = []): string {
+/** Trần ký tự tài liệu tham khảo đưa vào 1 lượt trả lời (ngoài hướng dẫn chính). */
+export const REFERENCE_BUDGET_CHARS = 16000;
+const AUTO_REFERENCE_LIMIT = 3;
+
+/** Từ chức năng / xưng hô quá phổ biến trong tin khách — không nói lên chủ đề. */
+const STOP = new Set([
+  'em', 'anh', 'chi', 'minh', 'ban', 'shop', 'oi', 'co', 'khong', 'ko', 'duoc', 'dc', 'vay', 'sao', 'nao', 'the',
+  'cho', 'cua', 'la', 'va', 'voi', 'nhe', 'nha', 'roi', 'di', 'thi', 'ma', 'hay', 'bao', 'nhieu', 'may', 'gi', 'dau',
+  'lam', 'can', 'muon', 'lay', 'cai', 'nay', 'do', 'ben', 'ok', 'oke', 'cam', 'on', 'da', 'ah', 'ha', 'hen', 'nhen',
+  'vs', 'mot', 'hai', 'ba', 'con', 'ne', 'luon', 'giup', 'hoi', 'xin', 'biet', 'khi', 'neu', 've', 'tu', 'den', 'o',
+]);
+const COMMON_PAIRS = new Set(['cho em', 'cho minh', 'anh chi', 'shop oi', 'duoc khong', 'bao nhieu', 'nhu the', 'the nao', 'con khong', 'cam on']);
+
+/** Từ khách hay dùng → cách tài liệu thường viết. */
+const SYNONYMS: Array<[RegExp, string[]]> = [
+  [/\b(ship|sip|van chuyen|chuyen phat|gui hang)\b/, ['giao hang', 'phi giao', 'van chuyen']],
+  [/\b(coc|dat truoc|giu hang)\b/, ['dat coc', 'giu hang', 'dat hang']],
+  [/\b(ctv|cong tac vien)\b/, ['ctv', 'cong tac vien']],
+  [/\b(npp|nha phan phoi|dai ly)\b/, ['npp', 'nha phan phoi']],
+  [/\b(si|bo moi|tap hoa|lay nhieu|so luong)\b/, ['gia si', 'khach si']],
+  [/\b(loi|hu|hong|bao hanh|khong chay)\b/, ['bao hanh', 'doi tra']],
+  [/\b(doi|tra hang|hoan)\b/, ['doi tra', 'khieu nai']],
+  [/\b(ck|chuyen khoan|stk|tai khoan|cod|thanh toan|tra tien)\b/, ['thanh toan', 'chuyen khoan']],
+  [/\b(mo cua|dong cua|may gio|gio lam)\b/, ['gio mo cua', 'mo cua']],
+  [/\b(dia chi|o dau|cho nao|duong|kho)\b/, ['dia chi', 'kho']],
+  [/\b(diem|tich luy|tich diem)\b/, ['diem tich luy']],
+  [/\b(khuyen mai|giam gia|sale|uu dai)\b/, ['khuyen mai']],
+  [/\b(gia|bao gia)\b/, ['bao gia', 'gia']],
+];
+
+/** Cụm tra cứu của câu khách: âm tiết có nghĩa, cặp âm tiết, và từ đồng nghĩa. Đã bỏ dấu. */
+export function queryTerms(text: string): string[] {
+  const flat = fold(text).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const syl = flat.split(' ').filter(Boolean);
+  const out = new Set<string>();
+  for (let i = 0; i < syl.length; i++) {
+    if (syl[i].length >= 2 && !STOP.has(syl[i]) && !/^\d+$/.test(syl[i])) out.add(syl[i]);
+    if (i + 1 < syl.length) {
+      const pair = `${syl[i]} ${syl[i + 1]}`;
+      if (!COMMON_PAIRS.has(pair) && !(STOP.has(syl[i]) && STOP.has(syl[i + 1]))) out.add(pair);
+    }
+  }
+  for (const [re, adds] of SYNONYMS) if (re.test(` ${flat} `)) adds.forEach((a) => out.add(a));
+  return [...out];
+}
+
+/** Khớp nguyên từ trong chuỗi đã bỏ dấu (để "si" không dính vào "sinh"). */
+function hasWord(hay: string, term: string): boolean {
+  return new RegExp(`(^|[^a-z0-9])${term.replace(/ /g, '[^a-z0-9]+')}([^a-z0-9]|$)`).test(hay);
+}
+
+/**
+ * Chọn tài liệu tham khảo cho 1 lượt: mọi file "always" + tối đa 3 file "auto"
+ * khớp chủ đề câu khách hỏi nhất (điểm = số cụm từ của khách xuất hiện trong
+ * tên file / tiêu đề / nội dung; tên file & tiêu đề nặng hơn). Giữ trong
+ * REFERENCE_BUDGET_CHARS. Hàm thuần.
+ */
+export function pickGuideFiles(files: GuideFile[], customerText: string, budget = REFERENCE_BUDGET_CHARS): GuideFile[] {
+  const q = queryTerms(customerText);
+  const always = files.filter((f) => f.mode === 'always');
+  const scored = files
+    .filter((f) => f.mode === 'auto')
+    .map((f) => {
+      const name = fold(f.path.replace(/\.[a-z]+$/i, '').replace(/[-_/.]/g, ' '));
+      const headings = fold(f.content.split('\n').filter((l) => /^#{1,4}\s/.test(l)).join(' '));
+      const body = fold(f.content);
+      let score = 0;
+      for (const t of q) {
+        const w = t.includes(' ') ? 2 : 1;
+        if (hasWord(name, t)) score += 4 * w;
+        if (hasWord(headings, t)) score += 2 * w;
+        if (hasWord(body, t)) score += w;
+      }
+      return { f, score };
+    })
+    .filter((x) => x.score >= 3)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, AUTO_REFERENCE_LIMIT)
+    .map((x) => x.f);
+  const out: GuideFile[] = [];
+  let used = 0;
+  for (const f of [...always, ...scored]) {
+    if (used >= budget) break;
+    const room = budget - used;
+    const content = f.content.length > room ? `${f.content.slice(0, room)}\n…(cắt bớt)` : f.content;
+    out.push({ ...f, content });
+    used += content.length;
+  }
+  return out;
+}
+
+export function renderReferences(files: GuideFile[]): string {
+  if (!files.length) return '';
+  return ['<tai_lieu_tham_khao>', ...files.map((f) => `### ${f.path}\n${f.content.replace(/<\/?tai_lieu_tham_khao>/g, '')}`), '</tai_lieu_tham_khao>'].join('\n');
+}
+
+export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = [], references: GuideFile[] = []): string {
   const g = guide?.trim() || '';
   const who = persona?.trim()
     || (g ? 'người trả lời khách của shop, đóng vai, xưng hô và tư vấn đúng như HƯỚNG DẪN CỦA SHOP ở cuối' : 'nhân viên chăm sóc khách hàng của shop, xưng "em", gọi khách là "anh/chị"');
@@ -126,7 +223,7 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
     '- Không bịa thông tin sản phẩm, đơn hàng, lịch hẹn hay điều khách chưa nói.',
     '- Viết như người nhắn Zalo: ngắn gọn, tự nhiên, tối đa 4 câu trừ khi khách hỏi nhiều ý. Không dùng dấu gạch ngang dài, không markdown.',
     '- Không chào lại từ đầu nếu hai bên đang giữa cuộc trò chuyện.',
-    '- Không tự nhắc là AI khi khách không hỏi. Khách hỏi thẳng có phải bot/AI không thì phải nói thật.',
+    '- KHÔNG BAO GIỜ nhận là người thật. Khách hỏi thẳng có phải bot/AI không thì phải nói thật. Được tự giới thiệu là trợ lý AI nếu HƯỚNG DẪN CỦA SHOP yêu cầu; nếu hướng dẫn không nói gì thì không cần tự nhắc.',
     '- Không yêu cầu khách gửi mật khẩu, mã OTP, thông tin thẻ.',
     '- Chọn "handoff" (KHÔNG trả lời) khi: khách bức xúc, khiếu nại, đòi hoàn tiền/đổi trả; câu hỏi cần xem đơn hàng, công nợ hay thông tin không có trong ngữ cảnh mà không thể trả lời an toàn; khách muốn gặp người thật; tin chỉ là sticker/ảnh/lời cảm ơn không cần đáp.',
     '',
@@ -142,6 +239,13 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
       '<huong_dan_cua_shop>',
       g.replace(/<\/?huong_dan_cua_shop>/g, ''),
       '</huong_dan_cua_shop>',
+    );
+  }
+  if (references.length) {
+    lines.push(
+      '',
+      'TÀI LIỆU THAM KHẢO của skill (chọn theo câu khách hỏi, cùng giá trị như HƯỚNG DẪN CỦA SHOP):',
+      renderReferences(references),
     );
   }
   if (lessons.length) {

@@ -226,20 +226,22 @@
               Hướng dẫn cho AI của nick này
               <v-spacer />
               <v-btn size="small" variant="text" prepend-icon="mdi-text-box-plus-outline" @click="insertGuideTemplate">Chèn mẫu</v-btn>
-              <v-btn size="small" color="primary" variant="tonal" prepend-icon="mdi-upload" @click="guideFileInput?.click()">
-                Tải lên file skill (.md, .txt)
+              <v-btn size="small" color="primary" variant="tonal" prepend-icon="mdi-upload" :loading="readingSkill" @click="guideFileInput?.click()">
+                Tải lên file skill (.skill, .zip, .md)
               </v-btn>
-              <input ref="guideFileInput" type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden @change="onGuideFile" />
+              <input ref="guideFileInput" type="file" accept=".skill,.zip,.md,.markdown,.txt,application/zip,text/plain,text/markdown" hidden @change="onGuideFile" />
+              <input ref="refFileInput" type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" multiple hidden @change="onReferenceFiles" />
             </div>
             <p class="aar-hint">
               Viết hoặc tải lên một hướng dẫn (skill) cho AI: vai trò, cách xưng hô, giọng văn, cách tư vấn, thông tin sản phẩm…
               AI của nick này sẽ làm theo. Giá/chính sách ghi ở đây AI được phép nêu.
+              Tải file <strong>.skill / .zip</strong>: SKILL.md vào ô dưới, các file trong references/ thành tài liệu tham khảo.
             </p>
             <div v-if="form.guideFileName" class="mb-2">
               <v-chip size="small" color="primary" variant="tonal" prepend-icon="mdi-file-document-outline" closable @click:close="form.guideFileName = null">
                 Skill: {{ form.guideFileName }}
               </v-chip>
-              <span class="aar-hint ml-2">Nội dung file đã nạp vào ô bên dưới, có thể sửa tiếp.</span>
+              <span class="aar-hint ml-2">Hướng dẫn chính đã nạp vào ô bên dưới, có thể sửa tiếp.</span>
             </div>
             <v-textarea
               v-model="form.extraInstruction"
@@ -249,9 +251,34 @@
               max-rows="22"
               :counter="GUIDE_MAX"
               :rules="[(v: string) => !v || v.length <= GUIDE_MAX || 'Quá dài']"
-              placeholder="Bấm &quot;Chèn mẫu&quot; để có khung gợi ý, hoặc tải lên file skill .md"
+              placeholder="Bấm &quot;Chèn mẫu&quot; để có khung gợi ý, hoặc tải lên file skill (.skill / .zip / .md)"
               class="aar-guide"
             />
+
+            <!-- Tài liệu tham khảo của skill -->
+            <div class="aar-taggroup-title mt-2 d-flex align-center flex-wrap" style="gap: 8px;">
+              <span>Tài liệu tham khảo ({{ form.guideFiles.length }} file · {{ refChars.toLocaleString('vi-VN') }} ký tự)</span>
+              <v-spacer />
+              <v-btn size="x-small" variant="text" prepend-icon="mdi-file-plus-outline" @click="refFileInput?.click()">Thêm tài liệu (.md)</v-btn>
+            </div>
+            <p class="aar-hint">
+              <strong>Luôn dùng</strong>: nạp vào mọi câu trả lời (câu cấm, giọng nói…).
+              <strong>Tự chọn</strong>: chỉ nạp khi khách hỏi đúng chủ đề (giá, bảo hành, giao hàng…), mỗi lượt tối đa 3 file để AI trả lời nhanh và rẻ.
+              <strong>Không dùng</strong>: giữ lại nhưng AI không đọc.
+            </p>
+            <div v-if="form.guideFiles.length === 0" class="aar-hint">Chưa có tài liệu tham khảo. Tải file .skill / .zip để nạp cả thư mục references/.</div>
+            <div v-for="(f, i) in form.guideFiles" :key="f.path" class="aar-ref">
+              <v-icon size="16" class="mr-1">mdi-file-document-outline</v-icon>
+              <span class="aar-ref-name" :title="f.path">{{ f.path }}</span>
+              <span class="aar-ref-size">{{ f.content.length.toLocaleString('vi-VN') }} ký tự</span>
+              <v-btn-toggle v-model="f.mode" mandatory density="compact" variant="outlined" divided color="primary" class="aar-ref-mode">
+                <v-btn value="always" size="x-small">Luôn dùng</v-btn>
+                <v-btn value="auto" size="x-small">Tự chọn</v-btn>
+                <v-btn value="off" size="x-small">Không dùng</v-btn>
+              </v-btn-toggle>
+              <v-btn size="x-small" variant="text" icon="mdi-eye-outline" title="Xem" @click="viewRef = f" />
+              <v-btn size="x-small" variant="text" icon="mdi-delete-outline" color="error" title="Bỏ tài liệu" @click="form.guideFiles.splice(i, 1)" />
+            </div>
 
             <!-- Bộ khung riêng của nick -->
             <div class="aar-step mt-5 d-flex align-center">
@@ -360,6 +387,21 @@
       </v-card>
     </v-dialog>
 
+    <!-- ════════ Xem tài liệu tham khảo ════════ -->
+    <v-dialog :model-value="!!viewRef" max-width="820" scrollable @update:model-value="(v: boolean) => { if (!v) viewRef = null; }">
+      <v-card v-if="viewRef">
+        <v-card-title class="d-flex align-center">
+          {{ viewRef.path }}
+          <v-spacer />
+          <v-btn icon="mdi-close" variant="text" size="small" @click="viewRef = null" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text>
+          <v-textarea v-model="viewRef.content" rows="18" auto-grow hide-details class="aar-guide" />
+        </v-card-text>
+      </v-card>
+    </v-dialog>
+
     <!-- ════════ Hộp thoại chấm 👎 — dạy lại AI ════════ -->
     <v-dialog v-model="badDialog" max-width="640">
       <v-card>
@@ -422,6 +464,7 @@ import { VBtn, VChip, VTable, VAlert } from 'vuetify/components';
 import { api } from '@/api/index';
 import { useToast } from '@/composables/use-toast';
 import { useAuthStore } from '@/stores/auth';
+import { readSkillFile, defaultReferenceMode } from '@/utils/read-skill-file';
 
 interface PlaybookEntry {
   id: string; zaloAccountId: string | null; title: string; category: string | null; keywords: string[];
@@ -432,6 +475,7 @@ interface Profile {
   hourStart: number; hourEnd: number; debounceSeconds: number; maxRepliesPerDay: number;
   maxRepliesPerConvPerDay: number; skipIfStaffRepliedWithinMin: number; blockedKeywords: string[];
   persona: string | null; extraInstruction: string | null; guideFileName: string | null; verifyGrounding: boolean;
+  guideFiles: GuideFile[];
   learningEnabled: boolean; lastLearnedAt: string | null;
 }
 interface ProfileCard extends Profile {
@@ -447,6 +491,7 @@ interface LogRow {
   customerText: string | null; outcome: string | null; staffFollowup: string | null; customerFollowup: string | null;
   feedback: string | null; correctedReply: string | null; feedbackNote: string | null;
 }
+type GuideFile = { path: string; content: string; mode: 'always' | 'auto' | 'off' };
 type TagOption = { value: string; text: string; color: string; emoji?: string | null; count: number };
 
 /** Bảng mục kịch bản (dùng cho cả khung chung lẫn khung riêng từng nick). */
@@ -508,7 +553,7 @@ const crmTags = ref<TagOption[]>([]);
 const form = reactive<Omit<Profile, 'zaloAccountId'>>({
   enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22, debounceSeconds: 20,
   maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10, blockedKeywords: [],
-  persona: null, extraInstruction: '', guideFileName: null, verifyGrounding: true,
+  persona: null, extraInstruction: '', guideFileName: null, guideFiles: [], verifyGrounding: true,
   learningEnabled: true, lastLearnedAt: null,
 });
 
@@ -635,7 +680,11 @@ async function submitBad() {
     sendingFeedback.value = false;
   }
 }
-const GUIDE_MAX = 20000;
+const GUIDE_MAX = 30000;
+const refFileInput = ref<HTMLInputElement | null>(null);
+const readingSkill = ref(false);
+const viewRef = ref<GuideFile | null>(null);
+const refChars = computed(() => form.guideFiles.reduce((s, f) => s + f.content.length, 0));
 const guideFileInput = ref<HTMLInputElement | null>(null);
 
 const GUIDE_TEMPLATE = `# Vai trò
@@ -669,27 +718,58 @@ async function onGuideFile(ev: Event) {
   const file = input.files?.[0];
   input.value = ''; // chọn lại cùng file vẫn kích hoạt
   if (!file) return;
-  if (file.size > 500_000) {
-    toast.error('File quá lớn (tối đa 500 KB).');
+  if (file.size > 5_000_000) {
+    toast.error('File quá lớn (tối đa 5 MB).');
     return;
   }
-  let text = (await file.text()).replace(/\r\n/g, '\n').trim();
-  if (!text) {
-    toast.warning('File trống.');
-    return;
+  readingSkill.value = true;
+  try {
+    const skill = await readSkillFile(file);
+    const isPack = /\.(skill|zip)$/i.test(file.name);
+    if (!skill.main && !skill.references.length) {
+      toast.warning('File trống.');
+      return;
+    }
+    const hasData = !!form.extraInstruction?.trim() || form.guideFiles.length > 0;
+    const what = isPack ? 'hướng dẫn và toàn bộ tài liệu tham khảo' : 'hướng dẫn chính';
+    if (hasData && !window.confirm(`Thay ${what} hiện tại bằng "${file.name}"?`)) return;
+    let main = skill.main;
+    if (main.length > GUIDE_MAX) {
+      toast.warning(`Hướng dẫn chính dài ${main.length.toLocaleString('vi-VN')} ký tự, chỉ giữ ${GUIDE_MAX.toLocaleString('vi-VN')} ký tự đầu.`);
+      main = main.slice(0, GUIDE_MAX);
+    }
+    form.extraInstruction = main;
+    form.guideFileName = file.name;
+    if (isPack) {
+      form.guideFiles = skill.references.map((d) => ({ path: d.path, content: d.content, mode: defaultReferenceMode(d.path) }));
+    }
+    toast.success(isPack
+      ? `Đã nạp skill "${skill.name}": hướng dẫn chính + ${skill.references.length} tài liệu tham khảo. Kiểm tra chế độ từng tài liệu rồi bấm Lưu cấu hình.`
+      : `Đã nạp "${file.name}". Nhớ bấm Lưu cấu hình.`, 6000);
+  } catch (err) {
+    toast.error(`Không đọc được file: ${(err as Error).message}`);
+  } finally {
+    readingSkill.value = false;
   }
-  if (form.extraInstruction?.trim() && !window.confirm(`Thay nội dung hướng dẫn hiện tại bằng file "${file.name}"?`)) return;
-  if (text.length > GUIDE_MAX) {
-    toast.warning(`File dài ${text.length.toLocaleString('vi-VN')} ký tự, chỉ giữ ${GUIDE_MAX.toLocaleString('vi-VN')} ký tự đầu.`);
-    text = text.slice(0, GUIDE_MAX);
+}
+
+async function onReferenceFiles(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  input.value = '';
+  for (const file of files) {
+    const content = (await file.text()).replace(/\r\n/g, '\n').trim();
+    if (!content) continue;
+    const idx = form.guideFiles.findIndex((f) => f.path === file.name);
+    const entry = { path: file.name, content, mode: defaultReferenceMode(file.name) };
+    if (idx >= 0) form.guideFiles.splice(idx, 1, entry);
+    else form.guideFiles.push(entry);
   }
-  form.extraInstruction = text;
-  form.guideFileName = file.name;
-  toast.success(`Đã nạp skill "${file.name}". Nhớ bấm Lưu cấu hình.`);
+  if (files.length) toast.success(`Đã thêm ${files.length} tài liệu. Nhớ bấm Lưu cấu hình.`);
 }
 
 function guideSummary(p: Profile) {
-  if (p.guideFileName) return `Skill: ${p.guideFileName}`;
+  if (p.guideFileName) return `Skill: ${p.guideFileName}${p.guideFiles?.length ? ` · ${p.guideFiles.length} tài liệu` : ''}`;
   const text = (p.extraInstruction || p.persona || '').replace(/^#+\s*/gm, '').trim();
   if (!text) return 'chưa có (mặc định xưng em / anh chị)';
   return text.split('\n').find((l) => l.trim())?.trim() || text;
@@ -780,7 +860,10 @@ async function loadEditor(accountId: string) {
   // Gộp "vai trò & xưng hô" cũ (nếu còn) vào hướng dẫn.
   const guide = [p.persona?.trim() ? `Vai trò & xưng hô: ${p.persona.trim()}` : '', p.extraInstruction?.trim() || '']
     .filter(Boolean).join('\n\n');
-  Object.assign(form, p, { persona: null, extraInstruction: guide, guideFileName: p.guideFileName ?? null });
+  Object.assign(form, p, {
+    persona: null, extraInstruction: guide, guideFileName: p.guideFileName ?? null,
+    guideFiles: (p.guideFiles ?? []).map((f) => ({ ...f })),
+  });
   editingConfigured.value = !!data.configured;
   if (data.configured) void loadLearning(accountId).catch(() => {});
   else { lessons.value = []; quality.value = []; }
@@ -950,6 +1033,10 @@ onMounted(loadAll);
 .aar-qbar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; background: rgba(var(--v-theme-on-surface), 0.05); border-radius: 3px; }
 .aar-qbar { width: 100%; border-radius: 3px; background: currentColor; }
 .aar-qlabel { font-size: 10px; color: rgba(var(--v-theme-on-surface), 0.55); margin-top: 2px; }
+.aar-ref { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; border-bottom: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); }
+.aar-ref-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aar-ref-size { font-size: 11px; color: rgba(var(--v-theme-on-surface), 0.55); white-space: nowrap; }
+.aar-ref-mode :deep(.v-btn) { text-transform: none; letter-spacing: 0; }
 .aar-lesson { display: flex; align-items: center; padding: 4px 0; border-bottom: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); font-size: 13px; }
 .aar-lesson-text { flex: 1; }
 .aar-lesson-off { opacity: 0.5; }

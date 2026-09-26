@@ -24,7 +24,7 @@ import { getAiConfig, getProviderApiKey, generateText } from '../ai-service.js';
 import { parseOffsetMinutes, orgDayRange } from '../daily-brief-service.js';
 import { getProfile } from './config-service.js';
 import { activeLessons, startLearningScheduler } from './learning-service.js';
-import { buildAutoReplyContext, buildSystemPrompt, renderSources, renderUserPrompt } from './context-builder.js';
+import { buildAutoReplyContext, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, localHour, matchesAnyKeyword,
   normalizeTagName, parseDecision, withinHours,
@@ -244,12 +244,15 @@ export async function evaluateConversation(
     return { decision: 'error', reason: 'thiếu khoá AI' };
   }
 
+  // Tài liệu tham khảo của skill: file "luôn dùng" + file khớp chủ đề câu khách hỏi
+  // (các tin khách đang chờ trả lời).
+  const references = pickGuideFiles(cfg.guideFiles ?? [], customerText);
   // Vòng tự học: bài học đang bật của nick này.
   const lessons = cfg.learningEnabled ? (await activeLessons(conv.zaloAccountId)).map((l) => l.content) : [];
   const ctx = await buildAutoReplyContext({ orgId, conversationId, zaloAccountId: conv.zaloAccountId, contactId: conv.contactId, pendingCustomerText: customerText, tags });
   let raw: string;
   try {
-    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons), renderUserPrompt(ctx), 900);
+    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references), renderUserPrompt(ctx), 900);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
     return { decision: 'error', reason: 'gọi AI lỗi' };
@@ -268,6 +271,7 @@ export async function evaluateConversation(
   if (cfg.verifyGrounding) {
     const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx)
       + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
+      + (references.length ? `\n\n${renderReferences(references)}` : '')
       + (lessons.length ? `\n\n<bai_hoc>\n${lessons.map((l) => `- ${l}`).join('\n')}\n</bai_hoc>` : '') });
     if (!checked) {
       await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);

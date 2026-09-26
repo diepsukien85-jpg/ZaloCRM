@@ -166,3 +166,43 @@ describe('buildSystemPrompt', () => {
     expect(p.indexOf('<huong_dan_cua_shop>')).toBeLessThan(p.indexOf('<bai_hoc>'));
   });
 });
+
+const { pickGuideFiles, queryTerms } = await import('../src/modules/ai/auto-reply/context-builder.js');
+
+describe('pickGuideFiles (tài liệu tham khảo của skill)', () => {
+  const files = [
+    { path: 'references/03-gia-don-hang-giao-hang.md', content: '# Giao hàng\nGiao hàng toàn quốc 2-4 ngày, phí giao theo bưu điện.', mode: 'auto' as const },
+    { path: 'references/04-bao-hanh-doi-tra.md', content: '# Bảo hành\nBảo hành 1 tháng, lỗi thì đổi mới.', mode: 'auto' as const },
+    { path: 'references/05-khach-si-ctv-npp.md', content: '# Khách sỉ, CTV\nCTV doanh số từ 2 triệu mỗi tháng.', mode: 'auto' as const },
+    { path: 'references/08-cam-va-chuyen-tin.md', content: 'Không nói rẻ nhất.', mode: 'always' as const },
+    { path: 'references/00-huong-dan-gan.md', content: 'Ghi chú cho người, bảo hành giao hàng CTV.', mode: 'off' as const },
+  ];
+  const names = (q: string) => pickGuideFiles(files, q).map((f) => f.path.split('/')[1].slice(0, 2));
+
+  it('chọn đúng file theo chủ đề, hiểu từ đồng nghĩa (ship → giao hàng, ctv)', () => {
+    expect(names('Ship về Cần Thơ mấy ngày')).toEqual(['08', '03']);
+    expect(names('máy bị lỗi có bảo hành không')).toEqual(['08', '04']);
+    expect(names('muốn làm CTV')).toEqual(['08', '05']);
+  });
+  it('câu không có chủ đề chỉ nạp file luôn dùng; file tắt không bao giờ nạp', () => {
+    expect(names('ok cảm ơn shop')).toEqual(['08']);
+    expect(names('bảo hành giao hàng ctv').includes('00')).toBe(false);
+  });
+  it('giữ trong ngân sách ký tự', () => {
+    const big = [{ path: 'a.md', content: 'x'.repeat(5000), mode: 'always' as const }, { path: 'b.md', content: 'y'.repeat(5000), mode: 'always' as const }];
+    const out = pickGuideFiles(big, 'gì', 6000);
+    expect(out.reduce((s, f) => s + f.content.length, 0)).toBeLessThanOrEqual(6000 + 20);
+  });
+  it('bỏ từ chức năng', () => {
+    expect(queryTerms('cho em hỏi với ạ')).not.toContain('em');
+  });
+});
+
+describe('validateProfileInput — tài liệu skill', () => {
+  it('chặn chế độ lạ / file quá dài; nhận hợp lệ', async () => {
+    const { validateProfileInput, GUIDE_FILE_MAX_CHARS } = await import('../src/modules/ai/auto-reply/config-service.js');
+    expect(validateProfileInput({ guideFiles: [{ path: 'a.md', content: 'x', mode: 'sometimes' as any }] })).toBeTruthy();
+    expect(validateProfileInput({ guideFiles: [{ path: 'a.md', content: 'x'.repeat(GUIDE_FILE_MAX_CHARS + 1), mode: 'auto' }] })).toBeTruthy();
+    expect(validateProfileInput({ guideFiles: [{ path: 'a.md', content: 'nội dung', mode: 'always' }], extraInstruction: 'x'.repeat(25000) })).toBeNull();
+  });
+});
