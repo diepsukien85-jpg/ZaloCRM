@@ -1,8 +1,9 @@
 /**
  * config-service.ts — cấu hình AI tự trả lời + kho kịch bản (bộ khung trả lời).
  *
- * Mặc định TẮT. Cấu hình được đọc trên mọi tin đến → cache 30 giây, xoá cache
- * ngay khi lưu.
+ * Mỗi nick Zalo một cấu hình riêng (xưng hô, lời dặn, khung giờ, thẻ kích
+ * hoạt, trần tin). Mặc định TẮT. Đọc trên mọi tin đến → cache 30 giây, xoá
+ * cache ngay khi lưu.
  */
 import { prisma } from '../../../shared/database/prisma-client.js';
 
@@ -14,11 +15,12 @@ export const DEFAULT_BLOCKED_KEYWORDS = [
 
 export type AutoReplyMode = 'auto' | 'dry_run';
 
-export type AutoReplyConfig = {
+/** Cấu hình AI tự trả lời của MỘT nick (mỗi nick một bản riêng). */
+export type AutoReplyProfile = {
+  zaloAccountId: string;
   enabled: boolean;
   mode: AutoReplyMode;
   triggerTags: string[];
-  accountIds: string[];
   hourStart: number;
   hourEnd: number;
   debounceSeconds: number;
@@ -30,22 +32,24 @@ export type AutoReplyConfig = {
   extraInstruction: string | null;
   verifyGrounding: boolean;
 };
+export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId'>>;
 
 const CACHE_MS = 30_000;
-const cache = new Map<string, { at: number; value: AutoReplyConfig }>();
+/** zaloAccountId → profile (null = nick chưa cấu hình). */
+const cache = new Map<string, { at: number; value: AutoReplyProfile | null }>();
 
 function strArr(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
-type Row = Awaited<ReturnType<typeof prisma.aiAutoReplyConfig.create>>;
+type Row = NonNullable<Awaited<ReturnType<typeof prisma.aiAutoReplyProfile.findUnique>>>;
 
-function normalize(row: Row): AutoReplyConfig {
+function normalize(row: Row): AutoReplyProfile {
   return {
+    zaloAccountId: row.zaloAccountId,
     enabled: row.enabled,
-    mode: row.mode === 'dry_run' ? 'dry_run' : 'auto',
+    mode: row.mode === 'auto' ? 'auto' : 'dry_run',
     triggerTags: strArr(row.triggerTags),
-    accountIds: strArr(row.accountIds),
     hourStart: row.hourStart,
     hourEnd: row.hourEnd,
     debounceSeconds: row.debounceSeconds,
@@ -59,17 +63,31 @@ function normalize(row: Row): AutoReplyConfig {
   };
 }
 
-export async function getAutoReplyConfig(orgId: string, opts: { fresh?: boolean } = {}): Promise<AutoReplyConfig> {
-  const hit = cache.get(orgId);
+/** Giá trị mặc định cho nick chưa có cấu hình (hiện ở form "Thêm nick"). */
+export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
+  return {
+    zaloAccountId, enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22,
+    debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10,
+    blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, verifyGrounding: true,
+  };
+}
+
+/** Profile của nick (null nếu chưa cấu hình). Cache 30 giây — đọc trên mọi tin đến. */
+export async function getProfile(orgId: string, zaloAccountId: string, opts: { fresh?: boolean } = {}): Promise<AutoReplyProfile | null> {
+  const hit = cache.get(zaloAccountId);
   if (!opts.fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  const row = await prisma.aiAutoReplyConfig.findUnique({ where: { orgId } })
-    ?? await prisma.aiAutoReplyConfig.create({ data: { orgId, blockedKeywords: DEFAULT_BLOCKED_KEYWORDS } });
-  const value = normalize(row);
-  cache.set(orgId, { at: Date.now(), value });
+  const row = await prisma.aiAutoReplyProfile.findUnique({ where: { zaloAccountId } });
+  const value = row && row.orgId === orgId ? normalize(row) : null;
+  cache.set(zaloAccountId, { at: Date.now(), value });
   return value;
 }
 
-export function validateConfigInput(input: Partial<AutoReplyConfig>): string | null {
+export async function listProfiles(orgId: string): Promise<AutoReplyProfile[]> {
+  const rows = await prisma.aiAutoReplyProfile.findMany({ where: { orgId }, orderBy: { createdAt: 'asc' } });
+  return rows.map(normalize);
+}
+
+export function validateProfileInput(input: ProfileInput): string | null {
   const int = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') return 'Công tắc bật/tắt không hợp lệ';
   if (input.mode !== undefined && input.mode !== 'auto' && input.mode !== 'dry_run') return 'Chế độ phải là auto hoặc dry_run';
@@ -79,10 +97,10 @@ export function validateConfigInput(input: Partial<AutoReplyConfig>): string | n
     if (!int(s, 0, 23) || !int(e, 1, 24) || s >= e) return 'Khung giờ: giờ bắt đầu 0-23, giờ kết thúc 1-24 và phải lớn hơn giờ bắt đầu';
   }
   if (input.debounceSeconds !== undefined && !int(input.debounceSeconds, 3, 300)) return 'Thời gian gom tin phải từ 3 đến 300 giây';
-  if (input.maxRepliesPerDay !== undefined && !int(input.maxRepliesPerDay, 1, 5000)) return 'Số tin AI mỗi ngày phải từ 1 đến 5000';
-  if (input.maxRepliesPerConvPerDay !== undefined && !int(input.maxRepliesPerConvPerDay, 1, 200)) return 'Số tin mỗi khách mỗi ngày phải từ 1 đến 200';
+  if (input.maxRepliesPerDay !== undefined && !int(input.maxRepliesPerDay, 1, 10000)) return 'Số tin AI mỗi ngày phải từ 1 đến 10000';
+  if (input.maxRepliesPerConvPerDay !== undefined && !int(input.maxRepliesPerConvPerDay, 1, 500)) return 'Số tin mỗi khách mỗi ngày phải từ 1 đến 500';
   if (input.skipIfStaffRepliedWithinMin !== undefined && !int(input.skipIfStaffRepliedWithinMin, 0, 1440)) return 'Thời gian nhường nhân viên phải từ 0 đến 1440 phút';
-  for (const key of ['triggerTags', 'accountIds', 'blockedKeywords'] as const) {
+  for (const key of ['triggerTags', 'blockedKeywords'] as const) {
     const v = input[key];
     if (v !== undefined && (!Array.isArray(v) || v.some((x) => typeof x !== 'string'))) return `${key} phải là mảng chuỗi`;
   }
@@ -93,30 +111,36 @@ export function validateConfigInput(input: Partial<AutoReplyConfig>): string | n
   return null;
 }
 
-export async function updateAutoReplyConfig(orgId: string, input: Partial<AutoReplyConfig>): Promise<AutoReplyConfig> {
-  await getAutoReplyConfig(orgId, { fresh: true });
-  const row = await prisma.aiAutoReplyConfig.update({
-    where: { orgId },
-    data: {
-      enabled: input.enabled,
-      mode: input.mode,
-      triggerTags: input.triggerTags?.map((t) => t.trim()).filter(Boolean),
-      accountIds: input.accountIds,
-      hourStart: input.hourStart,
-      hourEnd: input.hourEnd,
-      debounceSeconds: input.debounceSeconds,
-      maxRepliesPerDay: input.maxRepliesPerDay,
-      maxRepliesPerConvPerDay: input.maxRepliesPerConvPerDay,
-      skipIfStaffRepliedWithinMin: input.skipIfStaffRepliedWithinMin,
-      blockedKeywords: input.blockedKeywords?.map((t) => t.trim()).filter(Boolean),
-      persona: input.persona === undefined ? undefined : (input.persona?.trim() || null),
-      extraInstruction: input.extraInstruction === undefined ? undefined : (input.extraInstruction?.trim() || null),
-      verifyGrounding: input.verifyGrounding,
-    },
+export async function saveProfile(orgId: string, zaloAccountId: string, input: ProfileInput): Promise<AutoReplyProfile> {
+  const data = {
+    enabled: input.enabled,
+    mode: input.mode,
+    triggerTags: input.triggerTags?.map((t) => t.trim()).filter(Boolean),
+    hourStart: input.hourStart,
+    hourEnd: input.hourEnd,
+    debounceSeconds: input.debounceSeconds,
+    maxRepliesPerDay: input.maxRepliesPerDay,
+    maxRepliesPerConvPerDay: input.maxRepliesPerConvPerDay,
+    skipIfStaffRepliedWithinMin: input.skipIfStaffRepliedWithinMin,
+    blockedKeywords: input.blockedKeywords?.map((t) => t.trim()).filter(Boolean),
+    persona: input.persona === undefined ? undefined : (input.persona?.trim() || null),
+    extraInstruction: input.extraInstruction === undefined ? undefined : (input.extraInstruction?.trim() || null),
+    verifyGrounding: input.verifyGrounding,
+  };
+  const row = await prisma.aiAutoReplyProfile.upsert({
+    where: { zaloAccountId },
+    create: { orgId, zaloAccountId, ...data, blockedKeywords: data.blockedKeywords ?? DEFAULT_BLOCKED_KEYWORDS },
+    update: data,
   });
   const value = normalize(row);
-  cache.set(orgId, { at: Date.now(), value });
+  cache.set(zaloAccountId, { at: Date.now(), value });
   return value;
+}
+
+export async function deleteProfile(orgId: string, zaloAccountId: string): Promise<number> {
+  const res = await prisma.aiAutoReplyProfile.deleteMany({ where: { orgId, zaloAccountId } });
+  cache.delete(zaloAccountId);
+  return res.count;
 }
 
 /** Chỉ cho test. */
@@ -127,6 +151,8 @@ export function _clearAutoReplyConfigCache(): void {
 // ── Kho kịch bản ──────────────────────────────────────────────────────────
 
 export type PlaybookInput = {
+  /** null = dùng chung mọi nick; id nick = riêng nick đó. */
+  zaloAccountId?: string | null;
   title?: string;
   category?: string | null;
   keywords?: string[];
@@ -142,6 +168,7 @@ export function validatePlaybookInput(input: PlaybookInput, creating: boolean): 
   if (creating || input.content !== undefined) {
     if (typeof input.content !== 'string' || !input.content.trim() || input.content.length > 8000) return 'Nội dung bắt buộc, tối đa 8000 ký tự';
   }
+  if (input.zaloAccountId != null && typeof input.zaloAccountId !== 'string') return 'Nick Zalo không hợp lệ';
   if (input.keywords !== undefined && (!Array.isArray(input.keywords) || input.keywords.some((k) => typeof k !== 'string'))) return 'Từ khoá phải là mảng chuỗi';
   if (input.priority !== undefined && (!Number.isInteger(input.priority) || input.priority < 0 || input.priority > 100)) return 'Ưu tiên phải từ 0 đến 100';
   if (input.category != null && (typeof input.category !== 'string' || input.category.length > 100)) return 'Nhóm tối đa 100 ký tự';

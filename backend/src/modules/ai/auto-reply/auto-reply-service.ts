@@ -22,7 +22,7 @@ import { automationEventBus } from '../../automation/engine/event-bus.js';
 import { applyContactAggregateFromMessage, applyFriendAggregate } from '../../contacts/contact-aggregate.js';
 import { getAiConfig, getProviderApiKey, generateText } from '../ai-service.js';
 import { parseOffsetMinutes, orgDayRange } from '../daily-brief-service.js';
-import { getAutoReplyConfig, type AutoReplyConfig } from './config-service.js';
+import { getProfile } from './config-service.js';
 import { buildAutoReplyContext, buildSystemPrompt, renderSources, renderUserPrompt } from './context-builder.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, localHour, matchesAnyKeyword,
@@ -75,9 +75,12 @@ export function matchTriggerTag(tags: string[], triggerTags: string[]): string |
 
 // ── Nhật ký ────────────────────────────────────────────────────────────────
 
-async function writeLog(orgId: string, conversationId: string, sourceMessageId: string | null, decision: Decision, reason: string, content?: string | null, latencyMs?: number) {
+type LogTarget = { orgId: string; conversationId: string; zaloAccountId: string };
+
+async function writeLog(t: LogTarget, sourceMessageId: string | null, decision: Decision, reason: string, content?: string | null, latencyMs?: number) {
+  const { orgId, conversationId, zaloAccountId } = t;
   await prisma.aiAutoReplyLog.create({
-    data: { orgId, conversationId, sourceMessageId, decision, reason: reason.slice(0, 500), content: content ?? null, latencyMs: latencyMs ?? null },
+    data: { orgId, conversationId, zaloAccountId, sourceMessageId, decision, reason: reason.slice(0, 500), content: content ?? null, latencyMs: latencyMs ?? null },
   }).catch((err) => logger.warn('[ai-auto-reply] ghi nhật ký lỗi:', err));
 }
 
@@ -136,16 +139,21 @@ export async function evaluateConversation(
   const now = opts.now ?? new Date();
   const started = Date.now();
   const test = !!opts.test;
-  const cfg = await getAutoReplyConfig(orgId);
-  if (!cfg.enabled && !test) return { decision: 'skipped', reason: 'tắt' };
-  // Chạy thử không ghi nhật ký (không tính vào trần ngày).
-  const log: typeof writeLog = test ? async () => {} : writeLog;
-
   const conv = await prisma.conversation.findFirst({
     where: { id: conversationId, orgId },
     select: { id: true, threadType: true, zaloAccountId: true, externalThreadId: true, contactId: true },
   });
   if (!conv || conv.threadType !== 'user' || !conv.externalThreadId) return { decision: 'skipped', reason: 'không phải chat 1-1' };
+
+  // Cấu hình RIÊNG của nick nhận tin (xưng hô, lời dặn, giờ, thẻ, trần).
+  const cfg = await getProfile(orgId, conv.zaloAccountId);
+  if (!cfg) return { decision: 'skipped', reason: 'nick này chưa cấu hình AI' };
+  if (!cfg.enabled && !test) return { decision: 'skipped', reason: 'tắt' };
+  // Chạy thử không ghi nhật ký (không tính vào trần ngày).
+  const target: LogTarget = { orgId, conversationId, zaloAccountId: conv.zaloAccountId };
+  const log = test
+    ? async (..._args: unknown[]) => {}
+    : (...args: [string | null, Decision, string, (string | null)?, number?]) => writeLog(target, ...args);
 
   const tags = await getConversationTags(conv);
   const trigger = matchTriggerTag(tags, cfg.triggerTags);
@@ -192,7 +200,7 @@ export async function evaluateConversation(
   // Nhân viên đang trực hội thoại này → nhường.
   if (!test && lastSelf && lastSelf.sentVia !== 'automation' && cfg.skipIfStaffRepliedWithinMin > 0
     && now.getTime() - lastSelf.sentAt.getTime() < cfg.skipIfStaffRepliedWithinMin * 60_000) {
-    await log(orgId, conversationId, lastPending.id, 'skipped', 'nhân viên vừa trả lời');
+    await log(lastPending.id, 'skipped', 'nhân viên vừa trả lời');
     return { decision: 'skipped', reason: 'nhân viên vừa trả lời' };
   }
 
@@ -204,21 +212,21 @@ export async function evaluateConversation(
 
   const blocked = matchesAnyKeyword(customerText, cfg.blockedKeywords);
   if (blocked) {
-    await log(orgId, conversationId, lastPending.id, 'handoff', `từ khoá cần người thật: "${blocked}"`);
+    await log(lastPending.id, 'handoff', `từ khoá cần người thật: "${blocked}"`);
     return { decision: 'handoff', reason: `từ khoá "${blocked}"` };
   }
 
   const { start: dayStart } = orgDayRange(now, org?.timezone);
-  const [orgToday, convToday] = await Promise.all([
-    prisma.aiAutoReplyLog.count({ where: { orgId, decision: { in: ['sent', 'dry_run'] }, createdAt: { gte: dayStart } } }),
+  const [nickToday, convToday] = await Promise.all([
+    prisma.aiAutoReplyLog.count({ where: { orgId, zaloAccountId: conv.zaloAccountId, decision: { in: ['sent', 'dry_run'] }, createdAt: { gte: dayStart } } }),
     prisma.aiAutoReplyLog.count({ where: { conversationId, decision: { in: ['sent', 'dry_run'] }, createdAt: { gte: dayStart } } }),
   ]);
-  if (!test && orgToday >= cfg.maxRepliesPerDay) {
-    await log(orgId, conversationId, lastPending.id, 'skipped', 'hết trần tin AI trong ngày');
+  if (!test && nickToday >= cfg.maxRepliesPerDay) {
+    await log(lastPending.id, 'skipped', 'hết trần tin AI trong ngày của nick');
     return { decision: 'skipped', reason: 'hết trần ngày' };
   }
   if (!test && convToday >= cfg.maxRepliesPerConvPerDay) {
-    await log(orgId, conversationId, lastPending.id, 'skipped', 'hết trần tin AI cho khách này hôm nay');
+    await log(lastPending.id, 'skipped', 'hết trần tin AI cho khách này hôm nay');
     return { decision: 'skipped', reason: 'hết trần khách' };
   }
 
@@ -226,25 +234,25 @@ export async function evaluateConversation(
   if (!ai.enabled) return { decision: 'skipped', reason: 'AI của tổ chức đang tắt' };
   const apiKey = await getProviderApiKey(orgId, ai.provider);
   if (!apiKey) {
-    await log(orgId, conversationId, lastPending.id, 'error', `chưa cấu hình khoá AI (${ai.provider})`);
+    await log(lastPending.id, 'error', `chưa cấu hình khoá AI (${ai.provider})`);
     return { decision: 'error', reason: 'thiếu khoá AI' };
   }
 
-  const ctx = await buildAutoReplyContext({ orgId, conversationId, contactId: conv.contactId, pendingCustomerText: customerText, tags });
+  const ctx = await buildAutoReplyContext({ orgId, conversationId, zaloAccountId: conv.zaloAccountId, contactId: conv.contactId, pendingCustomerText: customerText, tags });
   let raw: string;
   try {
     raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction), renderUserPrompt(ctx), 900);
   } catch (err: any) {
-    await log(orgId, conversationId, lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
+    await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
     return { decision: 'error', reason: 'gọi AI lỗi' };
   }
   const decision = parseDecision(raw);
   if (!decision) {
-    await log(orgId, conversationId, lastPending.id, 'error', 'AI trả về không đúng định dạng', raw.slice(0, 1000));
+    await log(lastPending.id, 'error', 'AI trả về không đúng định dạng', raw.slice(0, 1000));
     return { decision: 'error', reason: 'AI trả sai định dạng' };
   }
   if (decision.action === 'handoff') {
-    await log(orgId, conversationId, lastPending.id, 'handoff', decision.reason || 'AI chuyển nhân viên', null, Date.now() - started);
+    await log(lastPending.id, 'handoff', decision.reason || 'AI chuyển nhân viên', null, Date.now() - started);
     return { decision: 'handoff', reason: decision.reason };
   }
 
@@ -252,13 +260,13 @@ export async function evaluateConversation(
   if (cfg.verifyGrounding) {
     const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx) });
     if (!checked) {
-      await log(orgId, conversationId, lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
+      await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
       return { decision: 'error', reason: 'kiểm duyệt lỗi' };
     }
     if (!checked.ok) text = applyGuards(checked.text, customerText);
   }
   if (!text.trim()) {
-    await log(orgId, conversationId, lastPending.id, 'error', 'tin sau lớp chặn bị rỗng');
+    await log(lastPending.id, 'error', 'tin sau lớp chặn bị rỗng');
     return { decision: 'error', reason: 'tin rỗng' };
   }
 
@@ -270,23 +278,23 @@ export async function evaluateConversation(
   });
   if (!test && newest && newest.id !== lastPending.id) {
     const reason = newest.senderType === 'self' ? 'nhân viên trả lời trong lúc AI soạn' : 'khách nhắn thêm, đợi lượt sau';
-    if (newest.senderType === 'self') await log(orgId, conversationId, lastPending.id, 'skipped', reason, text);
+    if (newest.senderType === 'self') await log(lastPending.id, 'skipped', reason, text);
     return { decision: 'skipped', reason };
   }
 
   const latency = Date.now() - started;
   if (cfg.mode === 'dry_run' || test) {
-    await log(orgId, conversationId, lastPending.id, 'dry_run', `thẻ "${trigger}" · ${decision.reason}`, text, latency);
+    await log(lastPending.id, 'dry_run', `thẻ "${trigger}" · ${decision.reason}`, text, latency);
     return { decision: 'dry_run', reason: decision.reason, content: text };
   }
 
   try {
     await sendReply(orgId, conv as { id: string; zaloAccountId: string; externalThreadId: string; contactId: string | null }, text);
   } catch (err: any) {
-    await log(orgId, conversationId, lastPending.id, 'error', `gửi Zalo lỗi: ${err?.code ?? ''} ${err?.message ?? err}`, text, latency);
+    await log(lastPending.id, 'error', `gửi Zalo lỗi: ${err?.code ?? ''} ${err?.message ?? err}`, text, latency);
     return { decision: 'error', reason: 'gửi lỗi' };
   }
-  await log(orgId, conversationId, lastPending.id, 'sent', `thẻ "${trigger}" · ${decision.reason}`, text, latency);
+  await log(lastPending.id, 'sent', `thẻ "${trigger}" · ${decision.reason}`, text, latency);
   logger.info(`[ai-auto-reply] đã trả lời conv=${conversationId} (${latency}ms)`);
   return { decision: 'sent', reason: decision.reason, content: text };
 }
@@ -337,23 +345,31 @@ async function sendReply(
 
 // ── Lắng nghe tin đến + gom tin ────────────────────────────────────────────
 
-type PendingEntry = { timer: NodeJS.Timeout | null; orgId: string; running: boolean; rerun: boolean };
+type PendingEntry = { timer: NodeJS.Timeout | null; orgId: string; running: boolean; rerun: boolean; delayMs: number };
 const pendingByConv = new Map<string, PendingEntry>();
 
-async function passesQuickFilter(orgId: string, conversationId: string, zaloAccountId: string | undefined, cfg: AutoReplyConfig): Promise<boolean> {
-  if (!cfg.enabled || cfg.triggerTags.length === 0) return false;
-  if (zaloAccountId && cfg.accountIds.length > 0 && !cfg.accountIds.includes(zaloAccountId)) return false;
+/** Lọc rẻ trước khi hẹn giờ: nick có cấu hình bật + chat 1-1 + khách mang thẻ kích hoạt. Trả debounce (ms) hoặc null. */
+async function quickFilter(orgId: string, conversationId: string, zaloAccountId: string | undefined): Promise<number | null> {
+  let accountId = zaloAccountId;
+  if (accountId) {
+    const early = await getProfile(orgId, accountId);
+    if (!early?.enabled || early.triggerTags.length === 0) return null;
+  }
   const conv = await prisma.conversation.findFirst({
     where: { id: conversationId, orgId },
     select: { threadType: true, zaloAccountId: true, externalThreadId: true, contactId: true },
   });
-  if (!conv || conv.threadType !== 'user') return false;
-  if (cfg.accountIds.length > 0 && !cfg.accountIds.includes(conv.zaloAccountId)) return false;
-  return !!matchTriggerTag(await getConversationTags(conv), cfg.triggerTags);
+  if (!conv || conv.threadType !== 'user') return null;
+  accountId = conv.zaloAccountId;
+  const cfg = await getProfile(orgId, accountId);
+  if (!cfg?.enabled || cfg.triggerTags.length === 0) return null;
+  if (!matchTriggerTag(await getConversationTags(conv), cfg.triggerTags)) return null;
+  return cfg.debounceSeconds * 1000;
 }
 
 function schedule(orgId: string, conversationId: string, delayMs: number) {
-  const entry = pendingByConv.get(conversationId) ?? { timer: null, orgId, running: false, rerun: false };
+  const entry = pendingByConv.get(conversationId) ?? { timer: null, orgId, running: false, rerun: false, delayMs };
+  entry.delayMs = delayMs;
   pendingByConv.set(conversationId, entry);
   if (entry.running) {
     entry.rerun = true; // đang xét dở → xét lại sau khi xong
@@ -376,8 +392,7 @@ async function run(conversationId: string) {
     entry.running = false;
     if (entry.rerun) {
       entry.rerun = false;
-      const cfg = await getAutoReplyConfig(entry.orgId).catch(() => null);
-      schedule(entry.orgId, conversationId, (cfg?.debounceSeconds ?? 20) * 1000);
+      schedule(entry.orgId, conversationId, entry.delayMs);
     } else {
       pendingByConv.delete(conversationId);
     }
@@ -392,10 +407,9 @@ export function startAiAutoReply(): void {
   automationEventBus.onType(['message_received'], async (event) => {
     const payload = event.payload as { conversationId?: string; zaloAccountId?: string } | undefined;
     if (!payload?.conversationId) return;
-    const cfg = await getAutoReplyConfig(event.orgId);
-    if (!cfg.enabled) return;
-    if (!(await passesQuickFilter(event.orgId, payload.conversationId, payload.zaloAccountId, cfg))) return;
-    schedule(event.orgId, payload.conversationId, cfg.debounceSeconds * 1000);
+    const delayMs = await quickFilter(event.orgId, payload.conversationId, payload.zaloAccountId);
+    if (delayMs === null) return;
+    schedule(event.orgId, payload.conversationId, delayMs);
   });
   logger.info('[ai-auto-reply] listener đã bật — chỉ trả lời hội thoại 1-1 có thẻ kích hoạt');
 }

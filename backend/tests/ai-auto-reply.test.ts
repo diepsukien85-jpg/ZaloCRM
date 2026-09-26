@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const prismaMock = {
-  aiAutoReplyConfig: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
+  aiAutoReplyProfile: { findUnique: vi.fn(), upsert: vi.fn() },
   aiAutoReplyLog: { create: vi.fn(), count: vi.fn() },
   aiPlaybookEntry: { findMany: vi.fn() },
   messageTemplate: { findMany: vi.fn() },
@@ -30,14 +30,14 @@ vi.mock('../src/modules/contacts/contact-aggregate.js', () => ({
 
 const guards = await import('../src/modules/ai/auto-reply/guardrails.js');
 const { evaluateConversation, matchTriggerTag, getConversationTags } = await import('../src/modules/ai/auto-reply/auto-reply-service.js');
-const { _clearAutoReplyConfigCache, validateConfigInput } = await import('../src/modules/ai/auto-reply/config-service.js');
+const { _clearAutoReplyConfigCache, validateProfileInput } = await import('../src/modules/ai/auto-reply/config-service.js');
 
 // 10:00 sáng giờ VN
 const NOW = new Date('2026-09-26T03:00:00.000Z');
 
 const CONFIG_ROW = {
-  id: 'cfg', orgId: 'org-1', enabled: true, mode: 'auto',
-  triggerTags: ['AI trả lời'], accountIds: [], hourStart: 7, hourEnd: 22,
+  id: 'cfg', orgId: 'org-1', zaloAccountId: 'za-1', enabled: true, mode: 'auto',
+  triggerTags: ['AI trả lời'], hourStart: 7, hourEnd: 22,
   debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15,
   skipIfStaffRepliedWithinMin: 10, blockedKeywords: ['hoàn tiền'],
   persona: null, extraInstruction: null, verifyGrounding: false,
@@ -46,7 +46,7 @@ const CONFIG_ROW = {
 
 function prime(opts: { config?: Partial<typeof CONFIG_ROW>; labels?: unknown[]; pendingText?: string; lastSelf?: any } = {}) {
   _clearAutoReplyConfigCache();
-  prismaMock.aiAutoReplyConfig.findUnique.mockResolvedValue({ ...CONFIG_ROW, ...opts.config });
+  prismaMock.aiAutoReplyProfile.findUnique.mockResolvedValue({ ...CONFIG_ROW, ...opts.config });
   prismaMock.conversation.findFirst.mockResolvedValue({
     id: 'conv-1', threadType: 'user', zaloAccountId: 'za-1', externalThreadId: 'uid-9', contactId: 'c-1',
   });
@@ -214,6 +214,24 @@ describe('evaluateConversation', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it('nick chưa có cấu hình AI → bỏ qua, không gọi AI', async () => {
+    prime();
+    prismaMock.aiAutoReplyProfile.findUnique.mockResolvedValue(null);
+    const r = await evaluateConversation('org-1', 'conv-1', { now: NOW });
+    expect(r.reason).toBe('nick này chưa cấu hình AI');
+    expect(aiServiceMock.generateText).not.toHaveBeenCalled();
+  });
+
+  it('dùng xưng hô RIÊNG của nick trong prompt; kịch bản lọc dùng chung + riêng nick', async () => {
+    prime({ config: { persona: 'Kim Mỹ, xưng "chị" gọi khách là "em"' } });
+    aiServiceMock.generateText.mockResolvedValue('{"action":"reply","reply":"Dạ còn em nhé","reason":"x"}');
+    sendMessage.mockResolvedValue({});
+    await evaluateConversation('org-1', 'conv-1', { now: NOW });
+    expect(aiServiceMock.generateText.mock.calls[0][3]).toContain('Kim Mỹ, xưng "chị"');
+    expect(prismaMock.aiPlaybookEntry.findMany.mock.calls[0][0].where.OR).toEqual([{ zaloAccountId: null }, { zaloAccountId: 'za-1' }]);
+    expect(prismaMock.aiAutoReplyLog.create.mock.calls.at(-1)[0].data.zaloAccountId).toBe('za-1');
+  });
+
   it('hết trần ngày → bỏ qua', async () => {
     prime();
     prismaMock.aiAutoReplyLog.count.mockResolvedValue(300);
@@ -222,10 +240,10 @@ describe('evaluateConversation', () => {
   });
 });
 
-describe('validateConfigInput', () => {
+describe('validateProfileInput', () => {
   it('chặn khung giờ sai và mảng không phải chuỗi', () => {
-    expect(validateConfigInput({ hourStart: 22, hourEnd: 7 })).toBeTruthy();
-    expect(validateConfigInput({ triggerTags: [1 as any] })).toBeTruthy();
-    expect(validateConfigInput({ hourStart: 0, hourEnd: 24, triggerTags: ['a'] })).toBeNull();
+    expect(validateProfileInput({ hourStart: 22, hourEnd: 7 })).toBeTruthy();
+    expect(validateProfileInput({ triggerTags: [1 as any] })).toBeTruthy();
+    expect(validateProfileInput({ hourStart: 0, hourEnd: 24, triggerTags: ['a'] })).toBeNull();
   });
 });

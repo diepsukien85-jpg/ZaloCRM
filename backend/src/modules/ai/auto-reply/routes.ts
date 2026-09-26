@@ -1,10 +1,12 @@
 /**
  * routes.ts — API cho AI tự trả lời theo thẻ phân loại.
  *
- *   GET    /api/v1/ai/auto-reply/config            — cấu hình + thống kê hôm nay
- *   PUT    /api/v1/ai/auto-reply/config            — lưu cấu hình (admin)
+ *   GET    /api/v1/ai/auto-reply/profiles          — cấu hình từng nick + thống kê hôm nay + danh sách nick
+ *   GET    /api/v1/ai/auto-reply/profiles/:accountId — cấu hình 1 nick (mặc định nếu chưa có)
+ *   PUT    /api/v1/ai/auto-reply/profiles/:accountId — lưu cấu hình 1 nick (admin)
+ *   DELETE /api/v1/ai/auto-reply/profiles/:accountId — xoá cấu hình 1 nick (admin)
  *   GET    /api/v1/ai/auto-reply/tags?accountIds=  — thẻ Zalo của nick đã chọn + Tag CRM (kèm số khách)
- *   GET    /api/v1/ai/auto-reply/playbook          — kho kịch bản
+ *   GET    /api/v1/ai/auto-reply/playbook          — kho kịch bản (dùng chung + riêng từng nick)
  *   POST   /api/v1/ai/auto-reply/playbook          — thêm mục (admin)
  *   PUT    /api/v1/ai/auto-reply/playbook/:id      — sửa mục (admin)
  *   DELETE /api/v1/ai/auto-reply/playbook/:id      — xoá mục (admin)
@@ -18,8 +20,8 @@ import { authMiddleware } from '../../auth/auth-middleware.js';
 import { requireRole } from '../../auth/role-middleware.js';
 import { orgDayRange } from '../daily-brief-service.js';
 import {
-  getAutoReplyConfig, updateAutoReplyConfig, validateConfigInput, validatePlaybookInput,
-  type AutoReplyConfig, type PlaybookInput,
+  defaultProfile, deleteProfile, getProfile, listProfiles, saveProfile, validatePlaybookInput,
+  validateProfileInput, type PlaybookInput, type ProfileInput,
 } from './config-service.js';
 import { evaluateConversation } from './auto-reply-service.js';
 
@@ -28,37 +30,93 @@ const ADMIN = { preHandler: requireRole('owner', 'admin') };
 export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authMiddleware);
 
-  app.get('/api/v1/ai/auto-reply/config', async (request: FastifyRequest, reply: FastifyReply) => {
+  /** Nick thuộc org → trả tên, null nếu không thuộc org. */
+  async function orgAccount(orgId: string, accountId: string) {
+    return prisma.zaloAccount.findFirst({
+      where: { id: accountId, orgId },
+      select: { id: true, displayName: true, phone: true, avatarUrl: true, status: true },
+    });
+  }
+
+  app.get('/api/v1/ai/auto-reply/profiles', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const orgId = request.user!.orgId;
-      const [config, org] = await Promise.all([
-        getAutoReplyConfig(orgId, { fresh: true }),
+      const [profiles, accounts, org] = await Promise.all([
+        listProfiles(orgId),
+        prisma.zaloAccount.findMany({
+          where: { orgId, purged: false },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, displayName: true, phone: true, avatarUrl: true, status: true },
+        }),
         prisma.organization.findUnique({ where: { id: orgId }, select: { timezone: true } }),
       ]);
       const { start } = orgDayRange(new Date(), org?.timezone);
       const grouped = await prisma.aiAutoReplyLog.groupBy({
-        by: ['decision'],
+        by: ['zaloAccountId', 'decision'],
         where: { orgId, createdAt: { gte: start } },
         _count: { _all: true },
       });
-      const today = Object.fromEntries(grouped.map((g) => [g.decision, g._count._all]));
-      return { config, today };
+      const todayOf = (id: string) => Object.fromEntries(
+        grouped.filter((g) => g.zaloAccountId === id).map((g) => [g.decision, g._count._all]),
+      );
+      const accById = new Map(accounts.map((a) => [a.id, a]));
+      const configured = new Set(profiles.map((p) => p.zaloAccountId));
+      return {
+        // Thẻ xếp theo thứ tự nick (giống trang Tài khoản Zalo), không theo giờ tạo.
+        profiles: accounts
+          .map((a) => profiles.find((p) => p.zaloAccountId === a.id))
+          .filter((p): p is NonNullable<typeof p> => !!p)
+          .map((p) => {
+            const a = accById.get(p.zaloAccountId)!;
+            return {
+              ...p,
+              accountName: a.displayName || a.phone || a.id.slice(0, 8),
+              accountAvatar: a.avatarUrl,
+              accountStatus: a.status,
+              today: todayOf(p.zaloAccountId),
+            };
+          }),
+        accounts: accounts.map((a) => ({
+          id: a.id,
+          name: a.displayName || a.phone || a.id.slice(0, 8),
+          status: a.status,
+          configured: configured.has(a.id),
+        })),
+      };
     } catch (err) {
-      logger.error('[ai-auto-reply] get config error:', err);
-      return reply.status(500).send({ error: 'Không tải được cấu hình' });
+      logger.error('[ai-auto-reply] list profiles error:', err);
+      return reply.status(500).send({ error: 'Không tải được cấu hình AI' });
     }
   });
 
-  app.put('/api/v1/ai/auto-reply/config', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
-    const input = (request.body ?? {}) as Partial<AutoReplyConfig>;
-    const invalid = validateConfigInput(input);
+  app.get('/api/v1/ai/auto-reply/profiles/:accountId', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    const acc = await orgAccount(orgId, accountId);
+    if (!acc) return reply.status(404).send({ error: 'Không tìm thấy nick Zalo' });
+    const profile = await getProfile(orgId, accountId, { fresh: true });
+    return { profile: profile ?? defaultProfile(accountId), configured: !!profile, accountName: acc.displayName || acc.phone };
+  });
+
+  app.put('/api/v1/ai/auto-reply/profiles/:accountId', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    const input = (request.body ?? {}) as ProfileInput & { zaloAccountId?: unknown };
+    delete input.zaloAccountId;
+    const invalid = validateProfileInput(input);
     if (invalid) return reply.status(400).send({ error: invalid });
+    if (!(await orgAccount(orgId, accountId))) return reply.status(404).send({ error: 'Không tìm thấy nick Zalo' });
     try {
-      return { config: await updateAutoReplyConfig(request.user!.orgId, input) };
+      return { profile: await saveProfile(orgId, accountId, input) };
     } catch (err) {
-      logger.error('[ai-auto-reply] update config error:', err);
+      logger.error('[ai-auto-reply] save profile error:', err);
       return reply.status(500).send({ error: 'Không lưu được cấu hình' });
     }
+  });
+
+  app.delete('/api/v1/ai/auto-reply/profiles/:accountId', ADMIN, async (request: FastifyRequest) => {
+    const { accountId } = request.params as { accountId: string };
+    return { removed: await deleteProfile(request.user!.orgId, accountId) };
   });
 
   /**
@@ -143,9 +201,13 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
     const input = (request.body ?? {}) as PlaybookInput;
     const invalid = validatePlaybookInput(input, true);
     if (invalid) return reply.status(400).send({ error: invalid });
+    if (input.zaloAccountId && !(await orgAccount(request.user!.orgId, input.zaloAccountId))) {
+      return reply.status(400).send({ error: 'Nick Zalo không hợp lệ' });
+    }
     const entry = await prisma.aiPlaybookEntry.create({
       data: {
         orgId: request.user!.orgId,
+        zaloAccountId: input.zaloAccountId || null,
         title: input.title!.trim(),
         category: input.category?.trim() || null,
         keywords: (input.keywords ?? []).map((k) => k.trim()).filter(Boolean),
@@ -164,9 +226,13 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
     if (invalid) return reply.status(400).send({ error: invalid });
     const existing = await prisma.aiPlaybookEntry.findFirst({ where: { id, orgId: request.user!.orgId }, select: { id: true } });
     if (!existing) return reply.status(404).send({ error: 'Không tìm thấy mục kịch bản' });
+    if (input.zaloAccountId && !(await orgAccount(request.user!.orgId, input.zaloAccountId))) {
+      return reply.status(400).send({ error: 'Nick Zalo không hợp lệ' });
+    }
     const entry = await prisma.aiPlaybookEntry.update({
       where: { id },
       data: {
+        zaloAccountId: input.zaloAccountId === undefined ? undefined : (input.zaloAccountId || null),
         title: input.title?.trim(),
         category: input.category === undefined ? undefined : (input.category?.trim() || null),
         keywords: input.keywords?.map((k) => k.trim()).filter(Boolean),
@@ -185,10 +251,10 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/v1/ai/auto-reply/logs', async (request: FastifyRequest) => {
-    const { limit = '50', decision } = request.query as { limit?: string; decision?: string };
+    const { limit = '50', decision, accountId } = request.query as { limit?: string; decision?: string; accountId?: string };
     const orgId = request.user!.orgId;
     const logs = await prisma.aiAutoReplyLog.findMany({
-      where: { orgId, ...(decision ? { decision } : {}) },
+      where: { orgId, ...(decision ? { decision } : {}), ...(accountId ? { zaloAccountId: accountId } : {}) },
       orderBy: { createdAt: 'desc' },
       take: Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200),
     });

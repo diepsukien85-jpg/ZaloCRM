@@ -29,6 +29,8 @@ export type AutoReplyContext = {
 export async function buildAutoReplyContext(input: {
   orgId: string;
   conversationId: string;
+  /** Nick nhận tin — lấy kịch bản dùng chung + kịch bản riêng của nick này. */
+  zaloAccountId: string;
   contactId: string | null;
   pendingCustomerText: string;
   tags: string[];
@@ -60,8 +62,9 @@ export async function buildAutoReplyContext(input: {
         })
       : [],
     prisma.aiPlaybookEntry.findMany({
-      where: { orgId, enabled: true },
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+      where: { orgId, enabled: true, OR: [{ zaloAccountId: null }, { zaloAccountId: input.zaloAccountId }] },
+      // Mục riêng của nick lên trước mục dùng chung khi cùng độ ưu tiên.
+      orderBy: [{ priority: 'desc' }, { zaloAccountId: { sort: 'asc', nulls: 'last' } }, { createdAt: 'asc' }],
       select: { title: true, category: true, keywords: true, content: true },
     }),
     prisma.messageTemplate.findMany({

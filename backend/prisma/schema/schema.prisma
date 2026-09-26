@@ -2298,6 +2298,8 @@ model SaleAssignmentState {
 }
 
 // ── AI tự trả lời khách 1-1 theo thẻ phân loại (2026-09-26) ─────────────────
+// AiAutoReplyConfig: bản dùng chung đầu tiên — KHÔNG còn dùng, giữ lại để không
+// mất dữ liệu; đã chuyển sang AiAutoReplyProfile (riêng từng nick).
 // Chỉ hội thoại 1-1 mà khách mang một trong các thẻ `triggerTags` (Tag CRM hoặc
 // thẻ phân loại Zalo) mới được AI trả lời → không phải gọi AI cho mọi tin đến.
 // Không khai relation Organization (giảm blast radius, giống GroupPostLog).
@@ -2325,10 +2327,38 @@ model AiAutoReplyConfig {
   @@map("ai_auto_reply_configs")
 }
 
+// Cấu hình AI tự trả lời RIÊNG TỪNG NICK (2026-09-26, thay AiAutoReplyConfig
+// dùng chung): mỗi nick một xưng hô, lời dặn, khung giờ, thẻ kích hoạt, trần tin.
+model AiAutoReplyProfile {
+  id                          String   @id @default(uuid())
+  orgId                       String   @map("org_id")
+  zaloAccountId               String   @unique @map("zalo_account_id")
+  enabled                     Boolean  @default(false)
+  mode                        String   @default("dry_run") // auto | dry_run
+  triggerTags                 Json     @default("[]") @map("trigger_tags")
+  hourStart                   Int      @default(7) @map("hour_start")
+  hourEnd                     Int      @default(22) @map("hour_end")
+  debounceSeconds             Int      @default(20) @map("debounce_seconds")
+  maxRepliesPerDay            Int      @default(300) @map("max_replies_per_day") // của nick này
+  maxRepliesPerConvPerDay     Int      @default(15) @map("max_replies_per_conv_per_day")
+  skipIfStaffRepliedWithinMin Int      @default(10) @map("skip_if_staff_replied_within_min")
+  blockedKeywords             Json     @default("[]") @map("blocked_keywords")
+  persona                     String?  @db.Text
+  extraInstruction            String?  @map("extra_instruction") @db.Text
+  verifyGrounding             Boolean  @default(true) @map("verify_grounding")
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId])
+  @@map("ai_auto_reply_profiles")
+}
+
 // Kho kịch bản (bộ khung trả lời) — AI chỉ được nêu giá/chính sách từ đây.
+// zaloAccountId null = dùng chung mọi nick; có giá trị = riêng nick đó.
 model AiPlaybookEntry {
   id        String   @id @default(uuid())
   orgId     String   @map("org_id")
+  zaloAccountId String? @map("zalo_account_id")
   title     String
   category  String?
   keywords  Json     @default("[]") // khách nhắn trúng → mục được ưu tiên đưa vào prompt
@@ -2339,6 +2369,7 @@ model AiPlaybookEntry {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([orgId, enabled])
+  @@index([orgId, zaloAccountId])
   @@map("ai_playbook_entries")
 }
 
@@ -2346,6 +2377,7 @@ model AiPlaybookEntry {
 model AiAutoReplyLog {
   id              String   @id @default(uuid())
   orgId           String   @map("org_id")
+  zaloAccountId   String?  @map("zalo_account_id")
   conversationId  String   @map("conversation_id")
   sourceMessageId String?  @map("source_message_id")
   decision        String
@@ -2356,6 +2388,7 @@ model AiAutoReplyLog {
 
   @@index([orgId, createdAt])
   @@index([conversationId, createdAt])
+  @@index([zaloAccountId, createdAt])
   @@map("ai_auto_reply_logs")
 }
 
