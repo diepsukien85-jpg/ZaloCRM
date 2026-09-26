@@ -3,7 +3,7 @@
  *
  *   GET    /api/v1/ai/auto-reply/config            — cấu hình + thống kê hôm nay
  *   PUT    /api/v1/ai/auto-reply/config            — lưu cấu hình (admin)
- *   GET    /api/v1/ai/auto-reply/tags              — thẻ có thể chọn làm thẻ kích hoạt
+ *   GET    /api/v1/ai/auto-reply/tags?accountIds=  — thẻ Zalo của nick đã chọn + Tag CRM (kèm số khách)
  *   GET    /api/v1/ai/auto-reply/playbook          — kho kịch bản
  *   POST   /api/v1/ai/auto-reply/playbook          — thêm mục (admin)
  *   PUT    /api/v1/ai/auto-reply/playbook/:id      — sửa mục (admin)
@@ -61,14 +61,70 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  /**
+   * Thẻ có thể chọn làm thẻ kích hoạt, THEO NICK đã chọn (?accountIds=a,b):
+   *   zalo: thẻ phân loại Zalo của từng nick (bảng zalo_labels — đủ cả thẻ chưa
+   *         gắn cho ai) + số khách của nick đó đang mang thẻ.
+   *   crm:  Tag CRM (dùng chung mọi nick) + số khách của các nick đã chọn mang tag.
+   * Giá trị lưu vào triggerTags: thẻ Zalo dạng "🔵 <tên>" (giống Tag CRM mirror).
+   */
   app.get('/api/v1/ai/auto-reply/tags', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const tags = await prisma.crmTag.findMany({
-        where: { orgId: request.user!.orgId, archivedAt: null, isActive: true },
-        orderBy: [{ managedBy: 'asc' }, { order: 'asc' }, { name: 'asc' }],
-        select: { name: true, color: true, emoji: true, managedBy: true, category: true },
-      });
-      return { tags };
+      const orgId = request.user!.orgId;
+      const { accountIds = '' } = request.query as { accountIds?: string };
+      const ids = accountIds.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
+      if (ids.length === 0) return { zalo: [], crm: [] };
+
+      const [accounts, labels, zaloCounts, crmTags, crmCounts] = await Promise.all([
+        prisma.zaloAccount.findMany({ where: { orgId, id: { in: ids } }, select: { id: true, displayName: true, phone: true } }),
+        prisma.zaloLabel.findMany({
+          where: { orgId, zaloAccountId: { in: ids } },
+          orderBy: [{ offset: 'asc' }, { text: 'asc' }],
+          select: { zaloAccountId: true, text: true, color: true, emoji: true },
+        }),
+        prisma.$queryRaw<Array<{ account_id: string; name: string; n: bigint }>>`
+          SELECT f.zalo_account_id AS account_id, l->>'name' AS name, COUNT(*) AS n
+          FROM friends f, jsonb_array_elements(f.zalo_labels) l
+          WHERE f.org_id = ${orgId} AND f.zalo_account_id = ANY(${ids}) AND jsonb_typeof(f.zalo_labels) = 'array'
+          GROUP BY 1, 2`,
+        prisma.crmTag.findMany({
+          where: { orgId, archivedAt: null, isActive: true, managedBy: null },
+          orderBy: [{ order: 'asc' }, { name: 'asc' }],
+          select: { name: true, color: true },
+        }),
+        prisma.$queryRaw<Array<{ name: string; n: bigint }>>`
+          SELECT x.tag AS name, COUNT(DISTINCT f.id) AS n
+          FROM friends f
+          JOIN contacts c ON c.id = f.contact_id
+          CROSS JOIN LATERAL (
+            SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(f.crm_tags_per_nick) = 'array' THEN f.crm_tags_per_nick ELSE '[]'::jsonb END)
+            UNION
+            SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(c.tags) = 'array' THEN c.tags ELSE '[]'::jsonb END)
+          ) AS x(tag)
+          WHERE f.org_id = ${orgId} AND f.zalo_account_id = ANY(${ids}) AND x.tag NOT LIKE '🔵 %'
+          GROUP BY 1`,
+      ]);
+
+      const zc = new Map(zaloCounts.map((r) => [`${r.account_id}|${r.name}`, Number(r.n)]));
+      const cc = new Map(crmCounts.map((r) => [r.name, Number(r.n)]));
+      const zalo = ids
+        .map((id) => accounts.find((a) => a.id === id))
+        .filter((a): a is NonNullable<typeof a> => !!a)
+        .map((a) => ({
+          accountId: a.id,
+          accountName: a.displayName || a.phone || a.id.slice(0, 8),
+          labels: labels
+            .filter((l) => l.zaloAccountId === a.id)
+            .map((l) => ({
+              value: `🔵 ${l.text}`,
+              text: l.text,
+              color: l.color,
+              emoji: l.emoji,
+              count: zc.get(`${a.id}|${l.text}`) ?? 0,
+            })),
+        }));
+      const crm = crmTags.map((t) => ({ value: t.name, text: t.name, color: t.color, count: cc.get(t.name) ?? 0 }));
+      return { zalo, crm };
     } catch (err) {
       logger.error('[ai-auto-reply] tags error:', err);
       return reply.status(500).send({ error: 'Không tải được danh sách thẻ' });

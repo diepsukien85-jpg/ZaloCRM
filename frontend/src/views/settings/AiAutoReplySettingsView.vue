@@ -25,7 +25,8 @@
         <div class="aar-row">
           <v-switch
             v-model="config.enabled"
-            color="primary"
+            color="success"
+            base-color="grey-darken-1"
             inset
             hide-details
             :label="config.enabled ? 'Đang bật' : 'Đang tắt'"
@@ -40,39 +41,81 @@
           Nên chạy thử vài ngày, xem nhật ký ổn rồi mới chuyển sang tự gửi.
         </p>
 
-        <v-autocomplete
-          v-model="config.triggerTags"
-          :items="tagItems"
-          label="Thẻ kích hoạt AI"
+        <!-- ① Chọn nick trước -->
+        <div class="aar-step mt-4">① Chọn nick Zalo cho AI trả lời</div>
+        <v-select
+          v-model="config.accountIds"
+          :items="accountItems"
+          label="Nick Zalo"
           multiple
           chips
           closable-chips
-          class="mt-4"
-          :hint="config.triggerTags.length ? 'Khách mang MỘT trong các thẻ này thì AI trả lời.' : 'Chưa chọn thẻ nào → AI không trả lời ai cả.'"
+          hint="AI chỉ trả lời khách nhắn vào các nick này."
           persistent-hint
-        >
-          <template #chip="{ props: chipProps, item }">
-            <v-chip v-bind="chipProps" :color="item.color" variant="tonal" size="small">{{ item.title }}</v-chip>
-          </template>
-        </v-autocomplete>
-        <p class="aar-hint">
-          Mẹo: tạo một thẻ phân loại riêng trên app Zalo (vd "AI trả lời"), gắn cho khách muốn giao cho AI.
-          Thẻ Zalo đồng bộ về CRM khoảng 1 phút.
-        </p>
+        />
+
+        <!-- ② Chọn thẻ của đúng nick đó -->
+        <div class="aar-step mt-5">② Chọn thẻ kích hoạt</div>
+        <v-alert v-if="config.accountIds.length === 0" type="info" variant="tonal" density="compact">
+          Chọn nick ở bước ① trước, danh sách thẻ phân loại của nick đó sẽ hiện ở đây.
+        </v-alert>
+        <div v-else-if="loadingTags" class="aar-hint">Đang tải thẻ…</div>
+        <template v-else>
+          <div v-for="group in zaloTagGroups" :key="group.accountId" class="aar-taggroup">
+            <div class="aar-taggroup-title">Thẻ phân loại Zalo của nick <strong>{{ group.accountName }}</strong></div>
+            <div v-if="group.labels.length === 0" class="aar-hint">
+              Nick này chưa có thẻ phân loại nào. Tạo thẻ trên app Zalo (vd "Bot AI"), khoảng 1 phút sau tải lại trang.
+            </div>
+            <v-chip-group v-else v-model="config.triggerTags" multiple column filter>
+              <v-chip
+                v-for="l in group.labels"
+                :key="group.accountId + l.value"
+                :value="l.value"
+                :color="l.color"
+                variant="outlined"
+                size="small"
+              >
+                {{ l.emoji ? l.emoji + ' ' : '' }}{{ l.text }}
+                <span class="aar-count">{{ l.count }} khách</span>
+              </v-chip>
+            </v-chip-group>
+          </div>
+          <div v-if="crmTagItems.length" class="aar-taggroup">
+            <div class="aar-taggroup-title">Tag CRM (dùng chung, đếm khách của các nick đã chọn)</div>
+            <v-chip-group v-model="config.triggerTags" multiple column filter>
+              <v-chip
+                v-for="t in crmTagItems"
+                :key="'crm' + t.value"
+                :value="t.value"
+                :color="t.color"
+                variant="outlined"
+                size="small"
+              >
+                {{ t.text }} <span class="aar-count">{{ t.count }} khách</span>
+              </v-chip>
+            </v-chip-group>
+          </div>
+          <v-alert
+            :type="config.triggerTags.length ? 'success' : 'warning'"
+            variant="tonal"
+            density="compact"
+            class="mt-2"
+          >
+            <template v-if="config.triggerTags.length">
+              AI sẽ trả lời khách đang mang thẻ: <strong>{{ selectedTagLabels }}</strong>
+              (hiện khoảng <strong>{{ selectedCustomerCount }}</strong> khách).
+            </template>
+            <template v-else>Chưa chọn thẻ nào → AI không trả lời ai cả.</template>
+          </v-alert>
+          <p class="aar-hint">
+            Mẹo: tạo một thẻ phân loại riêng trên app Zalo (vd "Bot AI"), chỉ gắn cho khách muốn giao cho AI.
+            Gắn / gỡ thẻ trên Zalo, khoảng 1 phút sau CRM cập nhật.
+          </p>
+        </template>
 
         <v-divider class="my-4" />
 
         <div class="aar-grid">
-          <v-select
-            v-model="config.accountIds"
-            :items="accountItems"
-            label="Áp dụng cho nick Zalo"
-            multiple
-            chips
-            closable-chips
-            hint="Để trống = mọi nick"
-            persistent-hint
-          />
           <div class="aar-hours">
             <v-text-field v-model.number="config.hourStart" type="number" label="Từ giờ" min="0" max="23" density="comfortable" />
             <span>→</span>
@@ -278,7 +321,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted } from 'vue';
 import { api } from '@/api/index';
 import { useToast } from '@/composables/use-toast';
 
@@ -310,7 +353,14 @@ const config = reactive({
   verifyGrounding: true,
 });
 const today = ref<Record<string, number>>({});
-const tagItems = ref<Array<{ title: string; value: string; color: string }>>([]);
+type TagOption = { value: string; text: string; color: string; emoji?: string | null; count: number };
+const zaloTagGroups = ref<Array<{ accountId: string; accountName: string; labels: TagOption[] }>>([]);
+const crmTagItems = ref<TagOption[]>([]);
+const loadingTags = ref(false);
+const allTagOptions = computed(() => [...zaloTagGroups.value.flatMap((g) => g.labels), ...crmTagItems.value]);
+const selectedTagLabels = computed(() => config.triggerTags.map((t) => t.replace(/^🔵\s*/, '')).join(', '));
+const selectedCustomerCount = computed(() =>
+  allTagOptions.value.filter((o) => config.triggerTags.includes(o.value)).reduce((sum, o) => sum + o.count, 0));
 const accountItems = ref<Array<{ title: string; value: string }>>([]);
 const playbook = ref<PlaybookEntry[]>([]);
 const logs = ref<LogRow[]>([]);
@@ -349,11 +399,44 @@ async function loadLogs() {
   } catch { /* nhật ký lỗi không chặn trang */ }
 }
 
+let tagsReady = false;
+
+/** Tải thẻ của các nick đang chọn. prune = bỏ thẻ đã chọn mà các nick mới không có. */
+async function loadTags(prune: boolean) {
+  if (config.accountIds.length === 0) {
+    zaloTagGroups.value = [];
+    crmTagItems.value = [];
+    if (prune) config.triggerTags = [];
+    return;
+  }
+  loadingTags.value = true;
+  try {
+    const { data } = await api.get('/ai/auto-reply/tags', { params: { accountIds: config.accountIds.join(',') } });
+    zaloTagGroups.value = data.zalo;
+    crmTagItems.value = data.crm;
+    const available = new Set(allTagOptions.value.map((o) => o.value));
+    if (prune) {
+      config.triggerTags = config.triggerTags.filter((t) => available.has(t));
+    } else {
+      // Thẻ đã lưu mà nick không còn (vd thẻ Zalo bị xoá) vẫn hiện để bỏ chọn được.
+      const missing = config.triggerTags.filter((t) => !available.has(t));
+      if (missing.length) {
+        crmTagItems.value = [...crmTagItems.value, ...missing.map((t) => ({ value: t, text: `${t} (không còn)`, color: 'grey', count: 0 }))];
+      }
+    }
+  } catch (err) {
+    toast.error(errorText(err, 'Không tải được thẻ của nick'));
+  } finally {
+    loadingTags.value = false;
+  }
+}
+
+watch(() => [...config.accountIds], () => { if (tagsReady) void loadTags(true); });
+
 async function loadAll() {
   try {
-    const [cfg, tags, pb, accounts] = await Promise.all([
+    const [cfg, pb, accounts] = await Promise.all([
       api.get('/ai/auto-reply/config'),
-      api.get('/ai/auto-reply/tags'),
       api.get('/ai/auto-reply/playbook'),
       api.get('/zalo-accounts').catch(() => ({ data: [] })),
     ]);
@@ -362,13 +445,6 @@ async function loadAll() {
       extraInstruction: cfg.data.config.extraInstruction ?? '',
     });
     today.value = cfg.data.today || {};
-    tagItems.value = (tags.data.tags as Array<{ name: string; color: string }>).map((t) => ({
-      title: t.name, value: t.name, color: t.color,
-    }));
-    // Thẻ đã lưu nhưng không còn trong danh sách (vd thẻ Zalo bị xoá) vẫn hiện để gỡ được.
-    for (const t of config.triggerTags) {
-      if (!tagItems.value.some((i) => i.value === t)) tagItems.value.push({ title: t, value: t, color: 'grey' });
-    }
     playbook.value = pb.data.entries;
     const list = Array.isArray(accounts.data) ? accounts.data : (accounts.data?.items ?? accounts.data?.accounts ?? []);
     accountItems.value = list.map((a: { id: string; displayName?: string; phone?: string }) => ({
@@ -376,6 +452,8 @@ async function loadAll() {
       value: a.id,
     }));
     loadError.value = '';
+    await loadTags(false);
+    tagsReady = true;
   } catch (err) {
     loadError.value = errorText(err, 'Không tải được cài đặt AI tự trả lời');
   }
@@ -383,6 +461,10 @@ async function loadAll() {
 }
 
 async function save() {
+  if (config.enabled && config.accountIds.length === 0) {
+    toast.error('Chọn ít nhất 1 nick Zalo ở bước ① trước khi bật.');
+    return;
+  }
   if (config.enabled && config.triggerTags.length === 0) {
     toast.warning('Chưa chọn thẻ kích hoạt nào: AI sẽ không trả lời ai cả.');
   }
@@ -463,6 +545,10 @@ onMounted(loadAll);
 .aar-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .aar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
 .aar-hours { display: flex; align-items: center; gap: 8px; }
+.aar-step { font-weight: 600; margin-bottom: 8px; }
+.aar-taggroup { margin-top: 12px; }
+.aar-taggroup-title { font-size: 13px; margin-bottom: 4px; }
+.aar-count { margin-left: 6px; font-size: 11px; opacity: 0.7; }
 .aar-hint { font-size: 13px; color: rgba(var(--v-theme-on-surface), 0.65); margin: 6px 0 0; }
 .aar-stats { font-size: 13px; color: rgba(var(--v-theme-on-surface), 0.7); padding-left: 8px; }
 .aar-cell-title { font-weight: 500; }
