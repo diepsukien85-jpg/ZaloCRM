@@ -2296,3 +2296,79 @@ model SaleAssignmentState {
 
   @@map("sale_assignment_states")
 }
+
+// ── AI tự trả lời khách 1-1 theo thẻ phân loại (2026-09-26) ─────────────────
+// Chỉ hội thoại 1-1 mà khách mang một trong các thẻ `triggerTags` (Tag CRM hoặc
+// thẻ phân loại Zalo) mới được AI trả lời → không phải gọi AI cho mọi tin đến.
+// Không khai relation Organization (giảm blast radius, giống GroupPostLog).
+model AiAutoReplyConfig {
+  id                          String   @id @default(uuid())
+  orgId                       String   @unique @map("org_id")
+  enabled                     Boolean  @default(false)
+  // 'auto' = AI gửi thẳng cho khách · 'dry_run' = chỉ ghi nhật ký, không gửi
+  mode                        String   @default("auto")
+  triggerTags                 Json     @default("[]") @map("trigger_tags") // string[] tên thẻ
+  accountIds                  Json     @default("[]") @map("account_ids") // string[] — rỗng = mọi nick
+  hourStart                   Int      @default(7) @map("hour_start")
+  hourEnd                     Int      @default(22) @map("hour_end")
+  debounceSeconds             Int      @default(20) @map("debounce_seconds") // gom tin khách nhắn dồn
+  maxRepliesPerDay            Int      @default(300) @map("max_replies_per_day")
+  maxRepliesPerConvPerDay     Int      @default(15) @map("max_replies_per_conv_per_day")
+  skipIfStaffRepliedWithinMin Int      @default(10) @map("skip_if_staff_replied_within_min")
+  blockedKeywords             Json     @default("[]") @map("blocked_keywords")
+  persona                     String?  @db.Text // vai trò + xưng hô, vd "nhân viên CSKH, xưng em gọi anh/chị"
+  extraInstruction            String?  @map("extra_instruction") @db.Text
+  verifyGrounding             Boolean  @default(true) @map("verify_grounding") // lượt AI soát bịa trước khi gửi
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  @@map("ai_auto_reply_configs")
+}
+
+// Kho kịch bản (bộ khung trả lời) — AI chỉ được nêu giá/chính sách từ đây.
+model AiPlaybookEntry {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  title     String
+  category  String?
+  keywords  Json     @default("[]") // khách nhắn trúng → mục được ưu tiên đưa vào prompt
+  content   String   @db.Text
+  priority  Int      @default(0)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId, enabled])
+  @@map("ai_playbook_entries")
+}
+
+// Nhật ký từng lượt AI xét hội thoại: sent | dry_run | handoff | skipped | error
+model AiAutoReplyLog {
+  id              String   @id @default(uuid())
+  orgId           String   @map("org_id")
+  conversationId  String   @map("conversation_id")
+  sourceMessageId String?  @map("source_message_id")
+  decision        String
+  reason          String?
+  content         String?  @db.Text
+  latencyMs       Int?     @map("latency_ms")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([orgId, createdAt])
+  @@index([conversationId, createdAt])
+  @@map("ai_auto_reply_logs")
+}
+
+// Nhóm Zalo bị bỏ qua (nhóm đăng bài): KHÔNG lưu tin đến/echo vào DB.
+// Theo Zalo group id (dùng chung mọi nick trong nhóm). Gửi bài vào nhóm vẫn chạy.
+model IgnoredGroup {
+  id            String   @id @default(uuid())
+  orgId         String   @map("org_id")
+  groupThreadId String   @map("group_thread_id")
+  groupName     String?  @map("group_name")
+  createdById   String?  @map("created_by_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([orgId, groupThreadId])
+  @@map("ignored_groups")
+}

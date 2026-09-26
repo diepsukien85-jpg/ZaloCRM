@@ -84,7 +84,9 @@
             <v-list-subheader>CRM &amp; Kênh</v-list-subheader>
             <v-list-item to="/settings/crm/tags" title="Tag CRM" prepend-icon="mdi-tag-multiple-outline" />
             <v-list-item to="/settings/crm/scoring" title="Lead scoring" prepend-icon="mdi-chart-line" />
+            <v-list-item to="/settings/crm/ai-auto-reply" title="AI tự trả lời" prepend-icon="mdi-robot-outline" />
             <v-list-item to="/settings/channels/zalo" title="Tài khoản Zalo" prepend-icon="mdi-cellphone-link" />
+            <v-list-item to="/settings/channels/ignored-groups" title="Nhóm bỏ qua" prepend-icon="mdi-bell-off-outline" />
             <v-list-item to="/settings/channels/integrations" title="Tích hợp" prepend-icon="mdi-connection" />
             <v-divider />
             <v-list-item to="/settings/dev/api" title="API &amp; Webhook" prepend-icon="mdi-api" />

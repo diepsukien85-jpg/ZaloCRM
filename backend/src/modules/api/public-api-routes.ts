@@ -11,6 +11,7 @@ import path from 'node:path';
 import { prisma } from '../../shared/database/prisma-client.js';
 import { assertSafeOutboundUrl, SsrfBlockedError } from '../../shared/utils/ssrf-guard.js';
 import { logger } from '../../shared/utils/logger.js';
+import { isGroupIgnored, countIgnoredSelfImageEchoes } from '../chat/ignored-groups-service.js';
 
 // Public API image-send limits. Ảnh tải từ URL (HTTPS only — qua ssrf-guard).
 const PUBLIC_IMAGE_MAX = 25 * 1024 * 1024; // 25MB/ảnh
@@ -108,6 +109,10 @@ async function countSelfImagesSince(
     where: { orgId, zaloAccountId, externalThreadId: threadId, threadType: threadType === 1 ? 'group' : 'user' },
     select: { id: true },
   });
+  // Nhóm bị bỏ qua không lưu echo vào DB → đếm echo ảnh trong bộ nhớ thay thế.
+  if (threadType === 1 && isGroupIgnored(orgId, threadId)) {
+    return countIgnoredSelfImageEchoes(zaloAccountId, threadId, since);
+  }
   if (!conv) return -1;
   return prisma.message.count({
     where: { conversationId: conv.id, contentType: 'image', senderType: 'self', sentAt: { gte: since } },

@@ -33,6 +33,9 @@ import { ensureBootstrapAdmin } from './modules/auth/ensure-admin.js';
 import { zaloRoutes } from './modules/zalo/zalo-routes.js';
 import { chatRoutes } from './modules/chat/chat-routes.js';
 import { folderRoutes } from './modules/chat/folder-routes.js';
+import { ignoredGroupsRoutes } from './modules/chat/ignored-groups-routes.js';
+import { avatarRefreshRoutes } from './modules/contacts/avatar-refresh-routes.js';
+import { startIgnoredGroupsCache } from './modules/chat/ignored-groups-service.js';
 import { presetRoutes } from './modules/chat/preset-routes.js';
 import { chatAttachmentRoutes } from './modules/chat/chat-attachment-routes.js';
 import { mediaRoutes, mediaAdminRoutes } from './modules/chat/media-routes.js';
@@ -208,6 +211,8 @@ async function bootstrap() {
   await app.register(zaloRoutes);
   await app.register(chatRoutes);
   await app.register(folderRoutes);
+  await app.register(ignoredGroupsRoutes);
+  await app.register(avatarRefreshRoutes);
   await app.register(presetRoutes);
   await app.register(chatAttachmentRoutes);
   await app.register(mediaRoutes);
@@ -368,10 +373,15 @@ async function bootstrap() {
     const { startScoringScheduler } = await import('./modules/scoring/scoring-scheduler.js');
     startScoringScheduler({ enabled: config.nodeEnv !== 'test' });
     await eventBuffer.start(io);
+    // Nhóm bỏ qua (nhóm đăng bài) — cache in-memory cho listener tra mỗi tin đến.
+    startIgnoredGroupsCache();
     // Phase 7 — Automation engine (event bus + materializer + task worker + 3 action handlers)
     if (config.nodeEnv !== 'test') {
       const { startAutomationEngine } = await import('./modules/automation/engine/index.js');
       startAutomationEngine();
+      // AI tự trả lời 1-1 — bám event bus của engine, chỉ xét hội thoại có thẻ kích hoạt.
+      const { startAiAutoReply } = await import('./modules/ai/auto-reply/auto-reply-service.js');
+      startAiAutoReply();
       // Phase F — Broadcast scheduler: poll automation_broadcasts scheduled→running
       const { startBroadcastScheduler } = await import('./modules/automation/broadcasts/broadcast-scheduler.js');
       startBroadcastScheduler();

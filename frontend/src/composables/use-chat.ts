@@ -87,6 +87,7 @@ export interface FriendshipInfo {
   crmTagsPerNick?: string[];
   /** "Tên gợi nhớ" — alias sale đặt qua Zalo Real, sync 2-way với CRM. */
   aliasInNick?: string | null;
+  zaloAvatarUrl?: string | null;
 }
 
 export interface Conversation {

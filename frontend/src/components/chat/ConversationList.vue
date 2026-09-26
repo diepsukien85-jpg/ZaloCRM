@@ -71,6 +71,7 @@
           :is-group="conv.threadType === 'group'"
           :platform="conv.threadType === 'user' ? 'zalo' : null"
           :gradient-seed="conv.id"
+          @error="requestAvatarRefresh(conv)"
         />
 
 
@@ -242,6 +243,7 @@ import { loadTagDefs, isZaloManaged, cleanTagName, tagColor } from '@/composable
 import { getOrgParts } from '@/composables/use-org-timezone';
 import PrivateBlur from '@/components/privacy/PrivateBlur.vue';
 import { usePrivacyVisibility } from '@/composables/use-privacy-visibility';
+import { bestConversationAvatar, isAvatarStale, requestAvatarRefresh } from '@/composables/use-avatar-refresh';
 
 const privacyVisibility = usePrivacyVisibility();
 
@@ -376,8 +378,15 @@ function avatarSrcOf(conv: Conversation): string | null {
   if (conv.threadType === 'group') {
     return (conv as Conversation & { groupAvatarUrl?: string }).groupAvatarUrl || null;
   }
-  return conv.contact?.avatarUrl || null;
+  return bestConversationAvatar(conv);
 }
+
+// Link avatar Zalo hết hạn (403) → xin backend làm mới cho các hội thoại đang hiển thị.
+watch(() => props.conversations, (list) => {
+  for (const conv of list) {
+    if (conv.threadType === 'user' && isAvatarStale(bestConversationAvatar(conv))) requestAvatarRefresh(conv);
+  }
+}, { immediate: true });
 
 // ── Nick nhận tin (multi-account inbox) ──────────────────────────────────────
 // Inbox gộp nhiều nick → mỗi hội thoại thuộc 1 nick (conv.zaloAccount). Luôn hiện

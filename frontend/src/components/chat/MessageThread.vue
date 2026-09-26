@@ -621,6 +621,7 @@ import type { Conversation, Message } from '@/composables/use-chat';
 import { formatInOrgTz, weekdayInOrgTz, getOrgParts } from '@/composables/use-org-timezone';
 import { api } from '@/api/index';
 import AISuggestBar from '@/components/chat/AISuggestBar.vue';
+import { bestConversationAvatar } from '@/composables/use-avatar-refresh';
 import CareStatusBadge from '@/components/ui/CareStatusBadge.vue';
 import Avatar from '@/components/ui/Avatar.vue';
 import EmojiPicker from '@/components/chat/EmojiPicker.vue';
@@ -857,11 +858,8 @@ const headerAvatarSrc = computed(() => {
   if (props.conversation?.threadType === 'group') {
     return (props.conversation as { groupAvatarUrl?: string }).groupAvatarUrl || null;
   }
-  // B7 — fallback avatar Zalo của Friend nếu Contact.avatarUrl chưa có
-  const friendship = props.conversation?.friendship as { zaloAvatarUrl?: string | null } | undefined;
-  return props.conversation?.contact?.avatarUrl
-    || friendship?.zaloAvatarUrl
-    || null;
+  // Contact.avatarUrl hoặc avatar per-nick của Friend — lấy link Zalo còn hạn lâu hơn.
+  return props.conversation ? bestConversationAvatar(props.conversation) : null;
 });
 const contactGender = computed(() => props.conversation?.contact?.gender || null);
 

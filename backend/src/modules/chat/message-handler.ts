@@ -11,6 +11,7 @@ import { applyContactAggregateFromMessage, applyContactInteraction, applyFriendA
 import { onInboundMessage as onInboundScoring, onOutboundMessage as onOutboundScoring } from '../scoring/scoring-hooks.js';
 import { syncReminderFromMessage } from '../contacts/reminder-sync.js';
 import { uploadBuffer, isManagedMediaUrl } from '../../shared/storage/media-store.js';
+import { isGroupIgnored, recordIgnoredSelfEcho } from './ignored-groups-service.js';
 
 export interface IncomingMessage {
   accountId: string;
@@ -237,6 +238,15 @@ export async function handleIncomingMessage(
       select: { orgId: true, ownerUserId: true },
     });
     if (!account) return null;
+
+    // Nhóm bị bỏ qua (nhóm đăng bài): không lưu tin. Echo ảnh self vẫn được đếm
+    // trong bộ nhớ để retry gửi ảnh (public API) không gửi trùng.
+    if (msg.threadType === 'group' && isGroupIgnored(account.orgId, msg.threadId)) {
+      if (msg.isSelf && !msg.isBackfill) {
+        recordIgnoredSelfEcho(msg.accountId, msg.threadId, msg.contentType, msg.timestamp);
+      }
+      return null;
+    }
 
     const contactId = await upsertContact(msg, account.orgId);
 

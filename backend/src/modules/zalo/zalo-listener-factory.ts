@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../../shared/utils/logger.js';
 import { prisma } from '../../shared/database/prisma-client.js';
 import { handleIncomingMessage, handleMessageUndo } from '../chat/message-handler.js';
+import { isGroupIgnored, recordIgnoredSelfEcho } from '../chat/ignored-groups-service.js';
 import { detectContentType, extractAlbumInfo, updateContactAvatar } from './zalo-message-helpers.js';
 import { handleFriendEvent } from './friend-event-handler.js';
 import { consumeIfExpected as consumeReactionEcho } from '../chat/reaction-echo-cache.js';
@@ -418,6 +419,21 @@ export function attachZaloListener(ctx: ListenerContext): void {
       // ThreadType in zca-js: 0 = User, 1 = Group
       const isGroup = message.type === 1;
       const senderUid = String(message.data?.uidFrom || '');
+
+      // Nhóm bị bỏ qua: dừng TRƯỚC khi gọi getUserInfo/getGroupInfo để khỏi tốn
+      // request Zalo cho nhóm đăng bài nhiều tin. Echo ảnh self vẫn được đếm trong
+      // bộ nhớ (retry gửi ảnh an toàn của public API dựa vào số này).
+      if (isGroup && isGroupIgnored(orgId, message.threadId)) {
+        if (message.isSelf) {
+          recordIgnoredSelfEcho(
+            accountId,
+            String(message.threadId || ''),
+            detectContentType(message.data?.msgType, message.data?.content),
+            parseInt(message.data?.ts || String(Date.now())),
+          );
+        }
+        return;
+      }
 
       // Resolve display name — prefer zaloName from API over dName.
       // Self msg gửi cho người lạ: resolve theo threadId để biết tên người NHẬN

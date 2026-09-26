@@ -155,7 +155,9 @@ export function extractAlbumInfo(contentType: string, rawContent: unknown): Albu
 export function updateContactAvatar(zaloUid: string, avatarUrl: string): void {
   prisma.contact
     .updateMany({
-      where: { zaloUid, avatarUrl: null },
+      // Link avatar Zalo có hạn (time=...) — link mới khác link cũ thì thay luôn,
+      // không chỉ khi đang trống (trước đây link hết hạn nằm lại mãi → 403).
+      where: { zaloUid, OR: [{ avatarUrl: null }, { avatarUrl: { not: avatarUrl } }] },
       data: { avatarUrl },
     })
     .catch(() => {});
