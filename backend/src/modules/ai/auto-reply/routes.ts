@@ -12,6 +12,14 @@
  *   DELETE /api/v1/ai/auto-reply/playbook/:id      — xoá mục (admin)
  *   GET    /api/v1/ai/auto-reply/logs              — nhật ký gần đây
  *   POST   /api/v1/ai/auto-reply/test/:conversationId — chạy thử 1 hội thoại, KHÔNG gửi (admin)
+ *   ── Vòng tự học ──
+ *   POST   /api/v1/ai/auto-reply/logs/:id/feedback          — chấm 👍/👎 (+ câu đúng) → rút bài học ngay (admin)
+ *   GET    /api/v1/ai/auto-reply/profiles/:accountId/lessons — bài học của nick
+ *   POST   /api/v1/ai/auto-reply/profiles/:accountId/lessons — thêm bài học tay (admin)
+ *   PUT    /api/v1/ai/auto-reply/lessons/:id                 — sửa / bật / tắt (admin)
+ *   DELETE /api/v1/ai/auto-reply/lessons/:id                 — xoá (admin)
+ *   POST   /api/v1/ai/auto-reply/profiles/:accountId/learn-now — học ngay (admin)
+ *   GET    /api/v1/ai/auto-reply/profiles/:accountId/quality — điểm chất lượng 14 ngày
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { prisma } from '../../../shared/database/prisma-client.js';
@@ -24,6 +32,7 @@ import {
   validateProfileInput, type PlaybookInput, type ProfileInput,
 } from './config-service.js';
 import { evaluateConversation } from './auto-reply-service.js';
+import { evaluateOutcomes, learnFromFeedback, qualityByDay, runDailyLearning, sanitizeLesson } from './learning-service.js';
 
 const ADMIN = { preHandler: requireRole('owner', 'admin') };
 
@@ -59,6 +68,17 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
       const todayOf = (id: string) => Object.fromEntries(
         grouped.filter((g) => g.zaloAccountId === id).map((g) => [g.decision, g._count._all]),
       );
+      const [lessonCounts, quality] = await Promise.all([
+        prisma.aiLesson.groupBy({ by: ['zaloAccountId'], where: { orgId, active: true }, _count: { _all: true } }),
+        Promise.all(profiles.map(async (p) => [p.zaloAccountId, await qualityByDay(orgId, p.zaloAccountId, 7)] as const)),
+      ]);
+      const lessonsOf = (id: string) => lessonCounts.find((l) => l.zaloAccountId === id)?._count._all ?? 0;
+      const quality7 = (id: string) => {
+        const days = quality.find(([k]) => k === id)?.[1] ?? [];
+        const good = days.reduce((s, d) => s + d.good, 0);
+        const bad = days.reduce((s, d) => s + d.bad, 0);
+        return good + bad > 0 ? Math.round((good / (good + bad)) * 100) : null;
+      };
       const accById = new Map(accounts.map((a) => [a.id, a]));
       const configured = new Set(profiles.map((p) => p.zaloAccountId));
       return {
@@ -74,6 +94,8 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
               accountAvatar: a.avatarUrl,
               accountStatus: a.status,
               today: todayOf(p.zaloAccountId),
+              lessonCount: lessonsOf(p.zaloAccountId),
+              quality7d: quality7(p.zaloAccountId),
             };
           }),
         accounts: accounts.map((a) => ({
@@ -273,6 +295,96 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
         };
       }),
     };
+  });
+
+  // ── Vòng tự học ─────────────────────────────────────────────────────────
+
+  app.post('/api/v1/ai/auto-reply/logs/:id/feedback', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { rating?: unknown; correctedReply?: unknown; note?: unknown };
+    if (body.rating !== 'good' && body.rating !== 'bad' && body.rating !== null) {
+      return reply.status(400).send({ error: 'rating phải là good, bad hoặc null' });
+    }
+    const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+    const log = await prisma.aiAutoReplyLog.findFirst({ where: { id, orgId: request.user!.orgId }, select: { id: true } });
+    if (!log) return reply.status(404).send({ error: 'Không tìm thấy lượt' });
+    await prisma.aiAutoReplyLog.update({
+      where: { id },
+      data: {
+        feedback: body.rating,
+        correctedReply: body.rating === 'bad' ? str(body.correctedReply, 2000) : null,
+        feedbackNote: str(body.note, 1000),
+        feedbackBy: request.user!.id,
+        feedbackAt: new Date(),
+      },
+    });
+    // 👎 kèm câu đúng / ghi chú → rút bài học ngay (nếu nick bật tự học).
+    const learned = body.rating === 'bad' ? await learnFromFeedback(id).catch((err) => {
+      logger.warn('[ai-learning] rút bài học lỗi:', err);
+      return { lesson: null, reason: 'lỗi' };
+    }) : { lesson: null };
+    return { ok: true, ...learned };
+  });
+
+  app.get('/api/v1/ai/auto-reply/profiles/:accountId/lessons', async (request: FastifyRequest) => {
+    const { accountId } = request.params as { accountId: string };
+    const lessons = await prisma.aiLesson.findMany({
+      where: { orgId: request.user!.orgId, zaloAccountId: accountId },
+      orderBy: [{ active: 'desc' }, { updatedAt: 'desc' }],
+      take: 200,
+    });
+    return { lessons };
+  });
+
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/lessons', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    if (!(await orgAccount(orgId, accountId))) return reply.status(404).send({ error: 'Không tìm thấy nick Zalo' });
+    const content = sanitizeLesson((request.body as { content?: unknown } | undefined)?.content);
+    if (!content) return reply.status(400).send({ error: 'Bài học quá ngắn hoặc không hợp lệ' });
+    return { lesson: await prisma.aiLesson.create({ data: { orgId, zaloAccountId: accountId, content, source: 'manual' } }) };
+  });
+
+  app.put('/api/v1/ai/auto-reply/lessons/:id', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { content?: unknown; active?: unknown };
+    const existing = await prisma.aiLesson.findFirst({ where: { id, orgId: request.user!.orgId }, select: { id: true } });
+    if (!existing) return reply.status(404).send({ error: 'Không tìm thấy bài học' });
+    const content = body.content === undefined ? undefined : sanitizeLesson(body.content);
+    if (content === null) return reply.status(400).send({ error: 'Bài học quá ngắn hoặc không hợp lệ' });
+    if (body.active !== undefined && typeof body.active !== 'boolean') return reply.status(400).send({ error: 'active phải là true/false' });
+    return {
+      lesson: await prisma.aiLesson.update({
+        where: { id },
+        // Chủ shop sửa tay thì coi như bài viết tay (không bị tự học gỡ đi).
+        data: { content, active: body.active as boolean | undefined, ...(content ? { source: 'manual' } : {}) },
+      }),
+    };
+  });
+
+  app.delete('/api/v1/ai/auto-reply/lessons/:id', ADMIN, async (request: FastifyRequest) => {
+    const { id } = request.params as { id: string };
+    return { removed: (await prisma.aiLesson.deleteMany({ where: { id, orgId: request.user!.orgId } })).count };
+  });
+
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/learn-now', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    if (!(await orgAccount(orgId, accountId))) return reply.status(404).send({ error: 'Không tìm thấy nick Zalo' });
+    try {
+      await evaluateOutcomes(); // chấm nốt các lượt đủ 30 phút trước khi học
+      return await runDailyLearning(orgId, accountId);
+    } catch (err) {
+      logger.error('[ai-learning] learn-now lỗi:', err);
+      return reply.status(500).send({ error: 'Học không thành công' });
+    }
+  });
+
+  app.get('/api/v1/ai/auto-reply/profiles/:accountId/quality', async (request: FastifyRequest) => {
+    const { accountId } = request.params as { accountId: string };
+    const { days = '14' } = request.query as { days?: string };
+    const n = Math.min(Math.max(parseInt(days, 10) || 14, 1), 60);
+    return { days: await qualityByDay(request.user!.orgId, accountId, n) };
   });
 
   app.post('/api/v1/ai/auto-reply/test/:conversationId', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {

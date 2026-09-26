@@ -23,6 +23,7 @@ import { applyContactAggregateFromMessage, applyFriendAggregate } from '../../co
 import { getAiConfig, getProviderApiKey, generateText } from '../ai-service.js';
 import { parseOffsetMinutes, orgDayRange } from '../daily-brief-service.js';
 import { getProfile } from './config-service.js';
+import { activeLessons, startLearningScheduler } from './learning-service.js';
 import { buildAutoReplyContext, buildSystemPrompt, renderSources, renderUserPrompt } from './context-builder.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, localHour, matchesAnyKeyword,
@@ -77,10 +78,15 @@ export function matchTriggerTag(tags: string[], triggerTags: string[]): string |
 
 type LogTarget = { orgId: string; conversationId: string; zaloAccountId: string };
 
-async function writeLog(t: LogTarget, sourceMessageId: string | null, decision: Decision, reason: string, content?: string | null, latencyMs?: number) {
+async function writeLog(t: LogTarget, sourceMessageId: string | null, decision: Decision, reason: string, content?: string | null, latencyMs?: number, customerText?: string) {
   const { orgId, conversationId, zaloAccountId } = t;
   await prisma.aiAutoReplyLog.create({
-    data: { orgId, conversationId, zaloAccountId, sourceMessageId, decision, reason: reason.slice(0, 500), content: content ?? null, latencyMs: latencyMs ?? null },
+    data: {
+      orgId, conversationId, zaloAccountId, sourceMessageId, decision, reason: reason.slice(0, 500),
+      content: content ?? null, latencyMs: latencyMs ?? null,
+      // Tin khách đã trả lời — vòng tự học cần để đối chiếu với cách nhân viên xử lý.
+      customerText: customerText ? customerText.slice(0, 2000) : null,
+    },
   }).catch((err) => logger.warn('[ai-auto-reply] ghi nhật ký lỗi:', err));
 }
 
@@ -153,7 +159,7 @@ export async function evaluateConversation(
   const target: LogTarget = { orgId, conversationId, zaloAccountId: conv.zaloAccountId };
   const log = test
     ? async (..._args: unknown[]) => {}
-    : (...args: [string | null, Decision, string, (string | null)?, number?]) => writeLog(target, ...args);
+    : (...args: [string | null, Decision, string, (string | null)?, number?, string?]) => writeLog(target, ...args);
 
   const tags = await getConversationTags(conv);
   const trigger = matchTriggerTag(tags, cfg.triggerTags);
@@ -238,10 +244,12 @@ export async function evaluateConversation(
     return { decision: 'error', reason: 'thiếu khoá AI' };
   }
 
+  // Vòng tự học: bài học đang bật của nick này.
+  const lessons = cfg.learningEnabled ? (await activeLessons(conv.zaloAccountId)).map((l) => l.content) : [];
   const ctx = await buildAutoReplyContext({ orgId, conversationId, zaloAccountId: conv.zaloAccountId, contactId: conv.contactId, pendingCustomerText: customerText, tags });
   let raw: string;
   try {
-    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction), renderUserPrompt(ctx), 900);
+    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons), renderUserPrompt(ctx), 900);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
     return { decision: 'error', reason: 'gọi AI lỗi' };
@@ -258,7 +266,9 @@ export async function evaluateConversation(
 
   let text = applyGuards(decision.reply, customerText);
   if (cfg.verifyGrounding) {
-    const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx) + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '') });
+    const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx)
+      + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
+      + (lessons.length ? `\n\n<bai_hoc>\n${lessons.map((l) => `- ${l}`).join('\n')}\n</bai_hoc>` : '') });
     if (!checked) {
       await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
       return { decision: 'error', reason: 'kiểm duyệt lỗi' };
@@ -284,7 +294,7 @@ export async function evaluateConversation(
 
   const latency = Date.now() - started;
   if (cfg.mode === 'dry_run' || test) {
-    await log(lastPending.id, 'dry_run', `thẻ "${trigger}" · ${decision.reason}`, text, latency);
+    await log(lastPending.id, 'dry_run', `thẻ "${trigger}" · ${decision.reason}`, text, latency, customerText);
     return { decision: 'dry_run', reason: decision.reason, content: text };
   }
 
@@ -294,7 +304,7 @@ export async function evaluateConversation(
     await log(lastPending.id, 'error', `gửi Zalo lỗi: ${err?.code ?? ''} ${err?.message ?? err}`, text, latency);
     return { decision: 'error', reason: 'gửi lỗi' };
   }
-  await log(lastPending.id, 'sent', `thẻ "${trigger}" · ${decision.reason}`, text, latency);
+  await log(lastPending.id, 'sent', `thẻ "${trigger}" · ${decision.reason}`, text, latency, customerText);
   logger.info(`[ai-auto-reply] đã trả lời conv=${conversationId} (${latency}ms)`);
   return { decision: 'sent', reason: decision.reason, content: text };
 }
@@ -411,6 +421,7 @@ export function startAiAutoReply(): void {
     if (delayMs === null) return;
     schedule(event.orgId, payload.conversationId, delayMs);
   });
+  startLearningScheduler();
   logger.info('[ai-auto-reply] listener đã bật — chỉ trả lời hội thoại 1-1 có thẻ kích hoạt');
 }
 

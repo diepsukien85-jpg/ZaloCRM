@@ -43,6 +43,15 @@
         <div class="aar-card-row">
           <span class="aar-card-label">Giờ:</span> {{ p.hourStart }}h → {{ p.hourEnd }}h
         </div>
+        <div class="aar-card-row">
+          <span class="aar-card-label">Tự học:</span>
+          <template v-if="p.learningEnabled">
+            <span v-if="p.quality7d !== null" :class="scoreClass(p.quality7d)">chất lượng 7 ngày {{ p.quality7d }}%</span>
+            <span v-else class="text-grey">chưa đủ dữ liệu</span>
+            <span class="ml-1">· {{ p.lessonCount }} bài học</span>
+          </template>
+          <span v-else class="text-grey">đang tắt</span>
+        </div>
         <div class="aar-card-foot">
           Hôm nay: gửi {{ p.today.sent || 0 }} · thử {{ p.today.dry_run || 0 }} · chuyển người {{ p.today.handoff || 0 }} · lỗi {{ p.today.error || 0 }}
         </div>
@@ -107,7 +116,7 @@
         <v-alert v-if="logs.length === 0" type="info" density="compact" variant="tonal">Chưa có lượt nào.</v-alert>
         <v-table v-else density="compact">
           <thead>
-            <tr><th>Lúc</th><th>Khách · nick</th><th>Kết quả</th><th>Nội dung / lý do</th></tr>
+            <tr><th>Lúc</th><th>Khách · nick</th><th>Kết quả</th><th>Nội dung / lý do</th><th>Sau đó</th><th v-if="isAdmin">Chấm</th></tr>
           </thead>
           <tbody>
             <tr v-for="l in logs" :key="l.id">
@@ -118,8 +127,22 @@
               </td>
               <td><v-chip size="x-small" :color="decisionColor(l.decision)" variant="tonal">{{ decisionLabel(l.decision) }}</v-chip></td>
               <td>
+                <div v-if="l.customerText" class="text-caption text-grey">Khách: {{ l.customerText }}</div>
                 <div v-if="l.content" class="aar-reply">{{ l.content }}</div>
                 <div class="text-grey text-caption">{{ l.reason }}</div>
+                <div v-if="l.correctedReply" class="text-caption text-success">Câu đúng: {{ l.correctedReply }}</div>
+              </td>
+              <td>
+                <v-chip v-if="l.outcome" size="x-small" variant="tonal" :color="outcomeColor(l.outcome)" :title="l.staffFollowup ? 'Nhân viên nhắn: ' + l.staffFollowup : (l.customerFollowup || '')">
+                  {{ outcomeLabel(l.outcome) }}
+                </v-chip>
+                <span v-else-if="l.decision === 'sent' || l.decision === 'dry_run'" class="text-caption text-grey">đang theo dõi</span>
+              </td>
+              <td v-if="isAdmin" class="aar-nowrap">
+                <template v-if="l.decision === 'sent' || l.decision === 'dry_run'">
+                  <v-btn size="x-small" variant="text" icon="mdi-thumb-up-outline" :color="l.feedback === 'good' ? 'success' : undefined" title="Trả lời tốt" @click="rateGood(l)" />
+                  <v-btn size="x-small" variant="text" icon="mdi-thumb-down-outline" :color="l.feedback === 'bad' ? 'error' : undefined" title="Chưa tốt — dạy lại AI" @click="openBad(l)" />
+                </template>
               </td>
             </tr>
           </tbody>
@@ -239,6 +262,63 @@
             <p class="aar-hint">AI dùng mục riêng của nick này + mục dùng chung. Mục riêng được ưu tiên khi cùng độ ưu tiên.</p>
             <PlaybookTable :entries="nickEntries" :editable="isAdmin" @edit="(e: PlaybookEntry) => openEntry(e, editingAccountId)" @remove="removeEntry" />
 
+            <!-- Vòng tự học -->
+            <div class="aar-step mt-5 d-flex align-center flex-wrap" style="gap: 8px;">
+              Tự học (rút kinh nghiệm hằng ngày)
+              <v-spacer />
+              <v-btn
+                v-if="isAdmin && editingConfigured"
+                size="small" variant="tonal" color="primary" prepend-icon="mdi-school-outline"
+                :loading="learning" :disabled="!form.learningEnabled" @click="learnNow"
+              >Học ngay</v-btn>
+            </div>
+            <v-switch
+              v-model="form.learningEnabled"
+              color="success"
+              base-color="grey-darken-1"
+              inset
+              hide-details
+              :label="form.learningEnabled ? 'Đang bật tự học' : 'Tắt tự học'"
+            />
+            <p class="aar-hint">
+              Sau mỗi câu trả lời, hệ thống theo dõi 30 phút: khách trả lời tiếp (tốt), nhân viên phải vào sửa hoặc khách phàn nàn (chưa tốt).
+              Mỗi đêm 23h AI đọc lại các lượt trong ngày và cách nhân viên xử lý, rút thành <strong>bài học</strong> dùng cho các lần sau.
+              Bạn chấm 👎 kèm câu đúng ở Nhật ký thì AI học ngay. AI chỉ học từ nhân viên và từ bạn, không học theo lời khách.
+              <template v-if="editingProfile?.lastLearnedAt"> Lần học gần nhất: {{ fmtTime(editingProfile.lastLearnedAt) }}.</template>
+            </p>
+
+            <template v-if="editingConfigured">
+              <div class="aar-taggroup-title">Chất lượng 14 ngày (tốt / (tốt + chưa tốt))</div>
+              <div class="aar-quality">
+                <div v-for="d in quality" :key="d.date" class="aar-qday" :title="qualityTitle(d)">
+                  <div class="aar-qbar-wrap">
+                    <div v-if="d.score !== null" class="aar-qbar" :class="scoreClass(d.score)" :style="{ height: Math.max(d.score, 4) + '%' }" />
+                  </div>
+                  <div class="aar-qlabel">{{ d.date.slice(8, 10) }}</div>
+                </div>
+              </div>
+
+              <div class="aar-taggroup-title mt-3 d-flex align-center">
+                Bài học của nick này ({{ lessons.filter((l) => l.active).length }} đang dùng)
+              </div>
+              <div v-if="lessons.length === 0" class="aar-hint">Chưa có bài học nào. Bài học sẽ xuất hiện sau khi AI trả lời khách và được chấm.</div>
+              <div v-for="l in lessons" :key="l.id" class="aar-lesson" :class="{ 'aar-lesson-off': !l.active }">
+                <v-chip size="x-small" variant="tonal" :color="l.source === 'manual' ? 'primary' : l.source === 'feedback' ? 'warning' : 'info'" class="mr-2">
+                  {{ l.source === 'manual' ? 'tự viết' : l.source === 'feedback' ? 'từ phản hồi' : 'tự học' }}
+                </v-chip>
+                <span class="aar-lesson-text">{{ l.content }}</span>
+                <template v-if="isAdmin">
+                  <v-btn size="x-small" variant="text" :icon="l.active ? 'mdi-toggle-switch' : 'mdi-toggle-switch-off-outline'" :color="l.active ? 'success' : 'grey'" :title="l.active ? 'Tắt bài học' : 'Bật bài học'" @click="toggleLesson(l)" />
+                  <v-btn size="x-small" variant="text" icon="mdi-pencil" title="Sửa" @click="editLesson(l)" />
+                  <v-btn size="x-small" variant="text" icon="mdi-delete-outline" color="error" title="Xoá" @click="deleteLesson(l)" />
+                </template>
+              </div>
+              <div v-if="isAdmin" class="aar-row mt-2">
+                <v-text-field v-model="newLesson" density="compact" hide-details label="Thêm bài học tự viết (vd: Luôn hỏi số lượng trước khi báo giá sỉ)" class="flex-grow-1" @keyup.enter="addLesson" />
+                <v-btn size="small" variant="tonal" @click="addLesson">Thêm</v-btn>
+              </div>
+            </template>
+
             <!-- Hàng rào -->
             <div class="aar-step mt-5">Khung giờ & giới hạn</div>
             <div class="aar-grid">
@@ -276,6 +356,25 @@
           <v-spacer />
           <v-btn variant="text" @click="editorOpen = false">Huỷ</v-btn>
           <v-btn v-if="isAdmin" color="primary" variant="flat" :disabled="!editingAccountId" :loading="saving" @click="saveProfile">Lưu cấu hình</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ════════ Hộp thoại chấm 👎 — dạy lại AI ════════ -->
+    <v-dialog v-model="badDialog" max-width="640">
+      <v-card>
+        <v-card-title>Dạy lại AI</v-card-title>
+        <v-card-text v-if="badLog">
+          <div v-if="badLog.customerText" class="aar-hint">Khách: {{ badLog.customerText }}</div>
+          <div class="aar-reply mb-3"><strong>AI đã trả lời:</strong> {{ badLog.content }}</div>
+          <v-textarea v-model="badForm.correctedReply" label="Câu trả lời đúng lẽ ra là" rows="3" counter="2000" />
+          <v-textarea v-model="badForm.note" label="Ghi chú cho AI (tuỳ chọn) — vd: không báo giá khi khách chưa nói số lượng" rows="2" counter="1000" />
+          <p class="aar-hint">AI sẽ rút ngay một bài học từ phản hồi này và áp dụng cho nick {{ badLog.nickName }}.</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="badDialog = false">Huỷ</v-btn>
+          <v-btn color="primary" :loading="sendingFeedback" @click="submitBad">Gửi & cho AI học</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -333,14 +432,20 @@ interface Profile {
   hourStart: number; hourEnd: number; debounceSeconds: number; maxRepliesPerDay: number;
   maxRepliesPerConvPerDay: number; skipIfStaffRepliedWithinMin: number; blockedKeywords: string[];
   persona: string | null; extraInstruction: string | null; guideFileName: string | null; verifyGrounding: boolean;
+  learningEnabled: boolean; lastLearnedAt: string | null;
 }
 interface ProfileCard extends Profile {
   accountName: string; accountStatus: string; today: Record<string, number>;
+  lessonCount: number; quality7d: number | null;
 }
+interface Lesson { id: string; content: string; source: string; active: boolean }
+interface DayQuality { date: string; sent: number; good: number; bad: number; noReply: number; handoff: number; score: number | null }
 interface AccountRow { id: string; name: string; status: string; configured: boolean }
 interface LogRow {
   id: string; conversationId: string; decision: string; reason: string | null; content: string | null;
   createdAt: string; customerName: string | null; nickName: string | null;
+  customerText: string | null; outcome: string | null; staffFollowup: string | null; customerFollowup: string | null;
+  feedback: string | null; correctedReply: string | null; feedbackNote: string | null;
 }
 type TagOption = { value: string; text: string; color: string; emoji?: string | null; count: number };
 
@@ -404,7 +509,132 @@ const form = reactive<Omit<Profile, 'zaloAccountId'>>({
   enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22, debounceSeconds: 20,
   maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10, blockedKeywords: [],
   persona: null, extraInstruction: '', guideFileName: null, verifyGrounding: true,
+  learningEnabled: true, lastLearnedAt: null,
 });
+
+// ── Vòng tự học ──
+const lessons = ref<Lesson[]>([]);
+const quality = ref<DayQuality[]>([]);
+const newLesson = ref('');
+const learning = ref(false);
+const editingProfile = computed(() => profiles.value.find((p) => p.zaloAccountId === editingAccountId.value) ?? null);
+const badDialog = ref(false);
+const badLog = ref<LogRow | null>(null);
+const badForm = reactive({ correctedReply: '', note: '' });
+const sendingFeedback = ref(false);
+
+function scoreClass(score: number) {
+  return score >= 80 ? 'aar-good' : score >= 50 ? 'aar-mid' : 'aar-bad';
+}
+function qualityTitle(d: DayQuality) {
+  return `${d.date}: gửi ${d.sent} · tốt ${d.good} · chưa tốt ${d.bad} · khách im ${d.noReply} · chuyển người ${d.handoff}`
+    + (d.score !== null ? ` · điểm ${d.score}%` : '');
+}
+function outcomeLabel(o: string) {
+  return ({
+    customer_replied: 'Khách trả lời tiếp', no_reply: 'Khách chưa phản hồi', staff_intervened: 'Nhân viên vào sửa',
+    customer_unhappy: 'Khách phàn nàn', staff_answered: 'Nhân viên đã trả lời', no_staff: 'Chưa ai trả lời',
+  } as Record<string, string>)[o] || o;
+}
+function outcomeColor(o: string) {
+  return ({ customer_replied: 'success', staff_intervened: 'warning', customer_unhappy: 'error', staff_answered: 'info' } as Record<string, string>)[o] || 'grey';
+}
+
+async function loadLearning(accountId: string) {
+  const [l, q] = await Promise.all([
+    api.get(`/ai/auto-reply/profiles/${accountId}/lessons`),
+    api.get(`/ai/auto-reply/profiles/${accountId}/quality`, { params: { days: 14 } }),
+  ]);
+  lessons.value = l.data.lessons;
+  quality.value = q.data.days;
+}
+async function learnNow() {
+  if (!editingAccountId.value) return;
+  learning.value = true;
+  try {
+    const { data } = await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/learn-now`);
+    if (data.skipped) toast.warning(`Chưa học được: ${data.skipped}`);
+    else toast.success(`Đã học ${data.reviewed} lượt: thêm ${data.added} bài học, bỏ ${data.removed} bài cũ.`);
+    await Promise.all([loadLearning(editingAccountId.value), loadProfiles(), loadLogs()]);
+  } catch (err) {
+    toast.error(errorText(err, 'Học không thành công'));
+  } finally {
+    learning.value = false;
+  }
+}
+async function addLesson() {
+  if (!editingAccountId.value || !newLesson.value.trim()) return;
+  try {
+    await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/lessons`, { content: newLesson.value });
+    newLesson.value = '';
+    await loadLearning(editingAccountId.value);
+  } catch (err) {
+    toast.error(errorText(err, 'Không thêm được bài học'));
+  }
+}
+async function toggleLesson(l: Lesson) {
+  try {
+    await api.put(`/ai/auto-reply/lessons/${l.id}`, { active: !l.active });
+    l.active = !l.active;
+  } catch (err) {
+    toast.error(errorText(err, 'Không đổi được'));
+  }
+}
+async function editLesson(l: Lesson) {
+  const next = window.prompt('Sửa bài học', l.content);
+  if (next === null || next.trim() === l.content) return;
+  try {
+    const { data } = await api.put(`/ai/auto-reply/lessons/${l.id}`, { content: next });
+    Object.assign(l, data.lesson);
+  } catch (err) {
+    toast.error(errorText(err, 'Không sửa được'));
+  }
+}
+async function deleteLesson(l: Lesson) {
+  if (!window.confirm('Xoá bài học này?')) return;
+  try {
+    await api.delete(`/ai/auto-reply/lessons/${l.id}`);
+    lessons.value = lessons.value.filter((x) => x.id !== l.id);
+  } catch (err) {
+    toast.error(errorText(err, 'Không xoá được'));
+  }
+}
+async function rateGood(l: LogRow) {
+  const next = l.feedback === 'good' ? null : 'good';
+  try {
+    await api.post(`/ai/auto-reply/logs/${l.id}/feedback`, { rating: next });
+    l.feedback = next;
+    l.correctedReply = null;
+  } catch (err) {
+    toast.error(errorText(err, 'Không chấm được'));
+  }
+}
+function openBad(l: LogRow) {
+  badLog.value = l;
+  badForm.correctedReply = l.correctedReply || '';
+  badForm.note = l.feedbackNote || '';
+  badDialog.value = true;
+}
+async function submitBad() {
+  if (!badLog.value) return;
+  sendingFeedback.value = true;
+  try {
+    const { data } = await api.post(`/ai/auto-reply/logs/${badLog.value.id}/feedback`, {
+      rating: 'bad', correctedReply: badForm.correctedReply, note: badForm.note,
+    });
+    badLog.value.feedback = 'bad';
+    badLog.value.correctedReply = badForm.correctedReply || null;
+    badLog.value.feedbackNote = badForm.note || null;
+    badDialog.value = false;
+    if (data.lesson) toast.success(`AI đã rút bài học: ${data.lesson}`, 6000);
+    else toast.warning(`Đã ghi phản hồi. ${data.reason ? 'Chưa rút được bài học: ' + data.reason : ''}`);
+    await loadProfiles();
+  } catch (err) {
+    toast.error(errorText(err, 'Không gửi được phản hồi'));
+  } finally {
+    sendingFeedback.value = false;
+  }
+}
 const GUIDE_MAX = 20000;
 const guideFileInput = ref<HTMLInputElement | null>(null);
 
@@ -552,6 +782,8 @@ async function loadEditor(accountId: string) {
     .filter(Boolean).join('\n\n');
   Object.assign(form, p, { persona: null, extraInstruction: guide, guideFileName: p.guideFileName ?? null });
   editingConfigured.value = !!data.configured;
+  if (data.configured) void loadLearning(accountId).catch(() => {});
+  else { lessons.value = []; quality.value = []; }
   // Thẻ đã lưu mà nick không còn (vd thẻ Zalo bị xoá) vẫn hiện để bỏ chọn được.
   const available = new Set([...zaloTags.value, ...crmTags.value].map((o) => o.value));
   const missing = form.triggerTags.filter((t) => !available.has(t));
@@ -710,5 +942,16 @@ onMounted(loadAll);
 .aar-hint { font-size: 13px; color: rgba(var(--v-theme-on-surface), 0.65); margin: 4px 0 8px; }
 .aar-reply { white-space: pre-wrap; margin-top: 4px; }
 .aar-nowrap { white-space: nowrap; }
+.aar-good { color: rgb(var(--v-theme-success)); }
+.aar-mid { color: rgb(var(--v-theme-warning)); }
+.aar-bad { color: rgb(var(--v-theme-error)); }
+.aar-quality { display: flex; gap: 4px; align-items: flex-end; height: 76px; padding: 4px 0; }
+.aar-qday { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; }
+.aar-qbar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; background: rgba(var(--v-theme-on-surface), 0.05); border-radius: 3px; }
+.aar-qbar { width: 100%; border-radius: 3px; background: currentColor; }
+.aar-qlabel { font-size: 10px; color: rgba(var(--v-theme-on-surface), 0.55); margin-top: 2px; }
+.aar-lesson { display: flex; align-items: center; padding: 4px 0; border-bottom: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); font-size: 13px; }
+.aar-lesson-text { flex: 1; }
+.aar-lesson-off { opacity: 0.5; }
 :deep(.aar-cell-title) { font-weight: 500; }
 </style>

@@ -112,7 +112,7 @@ export async function buildAutoReplyContext(input: {
   return { customer, history, pendingCustomerText: clip(pendingCustomerText, 1200), playbook, templates };
 }
 
-export function buildSystemPrompt(persona: string | null, guide: string | null): string {
+export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = []): string {
   const g = guide?.trim() || '';
   const who = persona?.trim()
     || (g ? 'người trả lời khách của shop, đóng vai, xưng hô và tư vấn đúng như HƯỚNG DẪN CỦA SHOP ở cuối' : 'nhân viên chăm sóc khách hàng của shop, xưng "em", gọi khách là "anh/chị"');
@@ -142,6 +142,16 @@ export function buildSystemPrompt(persona: string | null, guide: string | null):
       '<huong_dan_cua_shop>',
       g.replace(/<\/?huong_dan_cua_shop>/g, ''),
       '</huong_dan_cua_shop>',
+    );
+  }
+  if (lessons.length) {
+    lines.push(
+      '',
+      'BÀI HỌC RÚT RA từ các lần trả lời trước của nick này (từ cách nhân viên sửa và nhận xét của chủ shop).',
+      'Áp dụng khi phù hợp. Nếu mâu thuẫn với HƯỚNG DẪN CỦA SHOP hoặc quy tắc bắt buộc thì theo hướng dẫn / quy tắc.',
+      '<bai_hoc>',
+      ...lessons.map((l) => `- ${l.replace(/<\/?bai_hoc>/g, '')}`),
+      '</bai_hoc>',
     );
   }
   return lines.join('\n');

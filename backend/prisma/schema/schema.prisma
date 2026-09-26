@@ -2347,6 +2347,9 @@ model AiAutoReplyProfile {
   // Hướng dẫn cho AI (skill): vai trò, xưng hô, cách tư vấn… — viết tay hoặc tải file .md/.txt.
   extraInstruction            String?  @map("extra_instruction") @db.Text
   guideFileName               String?  @map("guide_file_name") // tên file skill đã tải lên (nếu có)
+  // Vòng tự học: rút bài học từ kết quả mỗi lượt trả lời + phản hồi của chủ shop.
+  learningEnabled             Boolean  @default(true) @map("learning_enabled")
+  lastLearnedAt               DateTime? @map("last_learned_at")
   verifyGrounding             Boolean  @default(true) @map("verify_grounding")
   createdAt                   DateTime @default(now()) @map("created_at")
   updatedAt                   DateTime @updatedAt @map("updated_at")
@@ -2386,12 +2389,43 @@ model AiAutoReplyLog {
   reason          String?
   content         String?  @db.Text
   latencyMs       Int?     @map("latency_ms")
+  customerText    String?  @map("customer_text") @db.Text // tin khách AI đã trả lời (để học)
+  // Kết quả sau khi trả lời (chấm tự động ~30 phút sau):
+  //   customer_replied | no_reply | staff_intervened | customer_unhappy | staff_answered | no_staff
+  outcome          String?
+  outcomeAt        DateTime? @map("outcome_at")
+  staffFollowup    String?   @map("staff_followup") @db.Text
+  customerFollowup String?   @map("customer_followup") @db.Text
+  // Phản hồi của chủ shop: good | bad (+ câu đúng lẽ ra là)
+  feedback         String?
+  feedbackNote     String?   @map("feedback_note") @db.Text
+  correctedReply   String?   @map("corrected_reply") @db.Text
+  feedbackBy       String?   @map("feedback_by")
+  feedbackAt       DateTime? @map("feedback_at")
   createdAt       DateTime @default(now()) @map("created_at")
 
   @@index([orgId, createdAt])
   @@index([conversationId, createdAt])
   @@index([zaloAccountId, createdAt])
+  @@index([outcome, createdAt])
   @@map("ai_auto_reply_logs")
+}
+
+// Bài học AI tự rút ra cho từng nick (vòng tự học). Chỉ học từ nhân viên và phản
+// hồi của chủ shop — không học theo lời khách (tránh bị khách "dạy" sai).
+model AiLesson {
+  id            String   @id @default(uuid())
+  orgId         String   @map("org_id")
+  zaloAccountId String   @map("zalo_account_id")
+  content       String   @db.Text
+  source        String   @default("daily") // daily | feedback | manual
+  active        Boolean  @default(true)
+  evidence      Json     @default("[]") // id các lượt nhật ký làm căn cứ
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([zaloAccountId, active])
+  @@map("ai_lessons")
 }
 
 // Nhóm Zalo bị bỏ qua (nhóm đăng bài): KHÔNG lưu tin đến/echo vào DB.

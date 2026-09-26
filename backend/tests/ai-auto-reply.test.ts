@@ -8,6 +8,7 @@ const prismaMock = {
   aiAutoReplyProfile: { findUnique: vi.fn(), upsert: vi.fn() },
   aiAutoReplyLog: { create: vi.fn(), count: vi.fn() },
   aiPlaybookEntry: { findMany: vi.fn() },
+  aiLesson: { findMany: vi.fn() },
   messageTemplate: { findMany: vi.fn() },
   conversation: { findFirst: vi.fn(), update: vi.fn() },
   contact: { findUnique: vi.fn() },

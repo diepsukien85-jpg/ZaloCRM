@@ -38,8 +38,11 @@ export type AutoReplyProfile = {
   /** Tên file skill đã tải lên (null nếu viết tay). */
   guideFileName: string | null;
   verifyGrounding: boolean;
+  /** Vòng tự học: rút bài học từ kết quả trả lời + phản hồi của chủ shop. */
+  learningEnabled: boolean;
+  lastLearnedAt: string | null;
 };
-export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId'>>;
+export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId' | 'lastLearnedAt'>>;
 
 const CACHE_MS = 30_000;
 /** zaloAccountId → profile (null = nick chưa cấu hình). */
@@ -67,6 +70,8 @@ function normalize(row: Row): AutoReplyProfile {
     persona: row.persona,
     extraInstruction: row.extraInstruction,
     guideFileName: row.guideFileName,
+    learningEnabled: row.learningEnabled,
+    lastLearnedAt: row.lastLearnedAt ? row.lastLearnedAt.toISOString() : null,
     verifyGrounding: row.verifyGrounding,
   };
 }
@@ -77,6 +82,7 @@ export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
     zaloAccountId, enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22,
     debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10,
     blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, guideFileName: null, verifyGrounding: true,
+    learningEnabled: true, lastLearnedAt: null,
   };
 }
 
@@ -117,6 +123,7 @@ export function validateProfileInput(input: ProfileInput): string | null {
   if (input.extraInstruction != null && input.extraInstruction.length > GUIDE_MAX_CHARS) return `Hướng dẫn cho AI tối đa ${GUIDE_MAX_CHARS.toLocaleString('vi-VN')} ký tự`;
   if (input.guideFileName != null && (typeof input.guideFileName !== 'string' || input.guideFileName.length > 200)) return 'Tên file hướng dẫn không hợp lệ';
   if (input.verifyGrounding !== undefined && typeof input.verifyGrounding !== 'boolean') return 'verifyGrounding phải là true/false';
+  if (input.learningEnabled !== undefined && typeof input.learningEnabled !== 'boolean') return 'learningEnabled phải là true/false';
   return null;
 }
 
@@ -136,6 +143,7 @@ export async function saveProfile(orgId: string, zaloAccountId: string, input: P
     extraInstruction: input.extraInstruction === undefined ? undefined : (input.extraInstruction?.trim() || null),
     guideFileName: input.guideFileName === undefined ? undefined : (input.guideFileName?.trim() || null),
     verifyGrounding: input.verifyGrounding,
+    learningEnabled: input.learningEnabled,
   };
   const row = await prisma.aiAutoReplyProfile.upsert({
     where: { zaloAccountId },
