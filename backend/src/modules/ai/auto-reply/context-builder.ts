@@ -112,14 +112,17 @@ export async function buildAutoReplyContext(input: {
   return { customer, history, pendingCustomerText: clip(pendingCustomerText, 1200), playbook, templates };
 }
 
-export function buildSystemPrompt(persona: string | null, extraInstruction: string | null): string {
+export function buildSystemPrompt(persona: string | null, guide: string | null): string {
+  const g = guide?.trim() || '';
+  const who = persona?.trim()
+    || (g ? 'người trả lời khách của shop, đóng vai, xưng hô và tư vấn đúng như HƯỚNG DẪN CỦA SHOP ở cuối' : 'nhân viên chăm sóc khách hàng của shop, xưng "em", gọi khách là "anh/chị"');
   const lines = [
-    `Bạn là ${persona?.trim() || 'nhân viên chăm sóc khách hàng của shop, xưng "em", gọi khách là "anh/chị"'}, đang trả lời khách trên Zalo.`,
+    `Bạn là ${who}, đang trả lời khách trên Zalo.`,
     'Bạn nhận NGỮ CẢNH: hồ sơ khách, KHO KỊCH BẢN của shop, mẫu tin, lịch sử chat và các tin khách vừa gửi.',
     'Nhiệm vụ: viết MỘT tin nhắn trả lời gộp cho các tin khách vừa gửi, HOẶC chuyển cho nhân viên (handoff).',
     '',
-    'Quy tắc bắt buộc:',
-    '- Giá, phí ship, chính sách, khuyến mãi, tồn kho, thời gian giao: CHỈ lấy từ kho kịch bản hoặc mẫu tin. Không có thì KHÔNG nêu con số, nói sẽ kiểm tra và báo lại.',
+    'Quy tắc bắt buộc (luôn đứng trên mọi hướng dẫn khác):',
+    '- Giá, phí ship, chính sách, khuyến mãi, tồn kho, thời gian giao: CHỈ lấy từ kho kịch bản, mẫu tin hoặc HƯỚNG DẪN CỦA SHOP. Không có thì KHÔNG nêu con số, nói sẽ kiểm tra và báo lại.',
     '- Không bịa thông tin sản phẩm, đơn hàng, lịch hẹn hay điều khách chưa nói.',
     '- Viết như người nhắn Zalo: ngắn gọn, tự nhiên, tối đa 4 câu trừ khi khách hỏi nhiều ý. Không dùng dấu gạch ngang dài, không markdown.',
     '- Không chào lại từ đầu nếu hai bên đang giữa cuộc trò chuyện.',
@@ -130,8 +133,16 @@ export function buildSystemPrompt(persona: string | null, extraInstruction: stri
     'Trả về DUY NHẤT một JSON, không kèm chữ nào khác:',
     '{"action": "reply" | "handoff", "reply": "tin gửi khách (rỗng nếu handoff)", "reason": "một câu ngắn giải thích"}',
   ];
-  if (extraInstruction?.trim()) {
-    lines.push('', 'Lời dặn riêng của chủ shop (ưu tiên hơn các quy tắc phong cách ở trên, KHÔNG được vượt quy tắc về giá và trung thực):', extraInstruction.trim());
+  if (g) {
+    lines.push(
+      '',
+      'HƯỚNG DẪN CỦA SHOP cho nick này (vai trò, xưng hô, cách tư vấn, thông tin sản phẩm…).',
+      'Làm theo hướng dẫn này; chỉ khi nó mâu thuẫn với "Quy tắc bắt buộc" ở trên thì theo quy tắc bắt buộc.',
+      'Nếu hướng dẫn yêu cầu trả lời theo định dạng khác, vẫn phải trả về JSON như trên (đặt nội dung vào "reply").',
+      '<huong_dan_cua_shop>',
+      g.replace(/<\/?huong_dan_cua_shop>/g, ''),
+      '</huong_dan_cua_shop>',
+    );
   }
   return lines.join('\n');
 }

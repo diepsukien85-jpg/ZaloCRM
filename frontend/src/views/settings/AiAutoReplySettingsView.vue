@@ -37,8 +37,8 @@
           <v-chip v-for="t in p.triggerTags" :key="t" size="x-small" class="mr-1" variant="tonal">{{ cleanTag(t) }}</v-chip>
         </div>
         <div class="aar-card-row">
-          <span class="aar-card-label">Xưng hô:</span>
-          <span class="aar-ellipsis">{{ p.persona || 'mặc định (em / anh chị)' }}</span>
+          <span class="aar-card-label">Hướng dẫn:</span>
+          <span class="aar-ellipsis">{{ guideSummary(p) }}</span>
         </div>
         <div class="aar-card-row">
           <span class="aar-card-label">Giờ:</span> {{ p.hourStart }}h → {{ p.hourEnd }}h
@@ -198,22 +198,36 @@
               </v-alert>
             </template>
 
-            <!-- Xưng hô + lời dặn riêng -->
-            <div class="aar-step mt-5">Xưng hô & lời dặn của nick này</div>
-            <v-textarea
-              v-model="form.persona"
-              label="Vai trò & xưng hô"
-              rows="2"
-              counter="1000"
-              placeholder='vd: Kim Mỹ, chủ kho sỉ ăn vặt, xưng "chị", gọi khách là "em"'
-            />
+            <!-- Hướng dẫn cho AI (skill) — viết tay hoặc tải file -->
+            <div class="aar-step mt-5 d-flex align-center flex-wrap" style="gap: 8px;">
+              Hướng dẫn cho AI của nick này
+              <v-spacer />
+              <v-btn size="small" variant="text" prepend-icon="mdi-text-box-plus-outline" @click="insertGuideTemplate">Chèn mẫu</v-btn>
+              <v-btn size="small" color="primary" variant="tonal" prepend-icon="mdi-upload" @click="guideFileInput?.click()">
+                Tải lên file skill (.md, .txt)
+              </v-btn>
+              <input ref="guideFileInput" type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden @change="onGuideFile" />
+            </div>
+            <p class="aar-hint">
+              Viết hoặc tải lên một hướng dẫn (skill) cho AI: vai trò, cách xưng hô, giọng văn, cách tư vấn, thông tin sản phẩm…
+              AI của nick này sẽ làm theo. Giá/chính sách ghi ở đây AI được phép nêu.
+            </p>
+            <div v-if="form.guideFileName" class="mb-2">
+              <v-chip size="small" color="primary" variant="tonal" prepend-icon="mdi-file-document-outline" closable @click:close="form.guideFileName = null">
+                Skill: {{ form.guideFileName }}
+              </v-chip>
+              <span class="aar-hint ml-2">Nội dung file đã nạp vào ô bên dưới, có thể sửa tiếp.</span>
+            </div>
             <v-textarea
               v-model="form.extraInstruction"
-              label="Lời dặn riêng cho AI"
-              rows="3"
-              counter="4000"
-              hint="vd: khách hỏi giá sỉ thì xin SĐT để nhân viên gọi lại; đơn trên 500k miễn ship."
-              persistent-hint
+              label="Hướng dẫn cho AI"
+              rows="10"
+              auto-grow
+              max-rows="22"
+              :counter="GUIDE_MAX"
+              :rules="[(v: string) => !v || v.length <= GUIDE_MAX || 'Quá dài']"
+              placeholder="Bấm &quot;Chèn mẫu&quot; để có khung gợi ý, hoặc tải lên file skill .md"
+              class="aar-guide"
             />
 
             <!-- Bộ khung riêng của nick -->
@@ -318,7 +332,7 @@ interface Profile {
   zaloAccountId: string; enabled: boolean; mode: 'auto' | 'dry_run'; triggerTags: string[];
   hourStart: number; hourEnd: number; debounceSeconds: number; maxRepliesPerDay: number;
   maxRepliesPerConvPerDay: number; skipIfStaffRepliedWithinMin: number; blockedKeywords: string[];
-  persona: string | null; extraInstruction: string | null; verifyGrounding: boolean;
+  persona: string | null; extraInstruction: string | null; guideFileName: string | null; verifyGrounding: boolean;
 }
 interface ProfileCard extends Profile {
   accountName: string; accountStatus: string; today: Record<string, number>;
@@ -389,8 +403,67 @@ const crmTags = ref<TagOption[]>([]);
 const form = reactive<Omit<Profile, 'zaloAccountId'>>({
   enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22, debounceSeconds: 20,
   maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10, blockedKeywords: [],
-  persona: '', extraInstruction: '', verifyGrounding: true,
+  persona: null, extraInstruction: '', guideFileName: null, verifyGrounding: true,
 });
+const GUIDE_MAX = 20000;
+const guideFileInput = ref<HTMLInputElement | null>(null);
+
+const GUIDE_TEMPLATE = `# Vai trò
+Bạn là … (tên), nhân viên tư vấn của … (tên shop / kho sỉ).
+
+# Xưng hô & giọng văn
+- Xưng "em", gọi khách là "anh/chị" (hoặc: xưng "chị", gọi khách "em").
+- Giọng thân thiện, ngắn gọn, dùng "dạ", "ạ".
+
+# Sản phẩm & giá
+- (ghi sản phẩm chính, giá sỉ/lẻ, số lượng tối thiểu…)
+
+# Ship & thanh toán
+- (phí ship, thời gian giao, hình thức thanh toán…)
+
+# Cách tư vấn
+- Hỏi khách cần mặt hàng nào, số lượng bao nhiêu trước khi báo giá.
+- Khách hỏi giá sỉ số lượng lớn thì xin SĐT để nhân viên gọi lại.
+
+# Điều không được làm
+- Không hứa giao hàng ngay trong ngày nếu chưa kiểm tra.
+`;
+
+function insertGuideTemplate() {
+  if (form.extraInstruction?.trim() && !window.confirm('Ô hướng dẫn đang có nội dung. Chèn mẫu vào cuối?')) return;
+  form.extraInstruction = form.extraInstruction?.trim() ? `${form.extraInstruction.trim()}\n\n${GUIDE_TEMPLATE}` : GUIDE_TEMPLATE;
+}
+
+async function onGuideFile(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = ''; // chọn lại cùng file vẫn kích hoạt
+  if (!file) return;
+  if (file.size > 500_000) {
+    toast.error('File quá lớn (tối đa 500 KB).');
+    return;
+  }
+  let text = (await file.text()).replace(/\r\n/g, '\n').trim();
+  if (!text) {
+    toast.warning('File trống.');
+    return;
+  }
+  if (form.extraInstruction?.trim() && !window.confirm(`Thay nội dung hướng dẫn hiện tại bằng file "${file.name}"?`)) return;
+  if (text.length > GUIDE_MAX) {
+    toast.warning(`File dài ${text.length.toLocaleString('vi-VN')} ký tự, chỉ giữ ${GUIDE_MAX.toLocaleString('vi-VN')} ký tự đầu.`);
+    text = text.slice(0, GUIDE_MAX);
+  }
+  form.extraInstruction = text;
+  form.guideFileName = file.name;
+  toast.success(`Đã nạp skill "${file.name}". Nhớ bấm Lưu cấu hình.`);
+}
+
+function guideSummary(p: Profile) {
+  if (p.guideFileName) return `Skill: ${p.guideFileName}`;
+  const text = (p.extraInstruction || p.persona || '').replace(/^#+\s*/gm, '').trim();
+  if (!text) return 'chưa có (mặc định xưng em / anh chị)';
+  return text.split('\n').find((l) => l.trim())?.trim() || text;
+}
 const nickEntries = computed(() => playbook.value.filter((e) => e.zaloAccountId === editingAccountId.value));
 const selectedCount = computed(() =>
   [...zaloTags.value, ...crmTags.value].filter((o) => form.triggerTags.includes(o.value)).reduce((s, o) => s + o.count, 0));
@@ -474,7 +547,10 @@ async function loadTagsFor(accountId: string) {
 async function loadEditor(accountId: string) {
   const [{ data }] = await Promise.all([api.get(`/ai/auto-reply/profiles/${accountId}`), loadTagsFor(accountId)]);
   const p = data.profile as Profile;
-  Object.assign(form, p, { persona: p.persona ?? '', extraInstruction: p.extraInstruction ?? '' });
+  // Gộp "vai trò & xưng hô" cũ (nếu còn) vào hướng dẫn.
+  const guide = [p.persona?.trim() ? `Vai trò & xưng hô: ${p.persona.trim()}` : '', p.extraInstruction?.trim() || '']
+    .filter(Boolean).join('\n\n');
+  Object.assign(form, p, { persona: null, extraInstruction: guide, guideFileName: p.guideFileName ?? null });
   editingConfigured.value = !!data.configured;
   // Thẻ đã lưu mà nick không còn (vd thẻ Zalo bị xoá) vẫn hiện để bỏ chọn được.
   const available = new Set([...zaloTags.value, ...crmTags.value].map((o) => o.value));

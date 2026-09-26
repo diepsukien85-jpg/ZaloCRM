@@ -2343,8 +2343,10 @@ model AiAutoReplyProfile {
   maxRepliesPerConvPerDay     Int      @default(15) @map("max_replies_per_conv_per_day")
   skipIfStaffRepliedWithinMin Int      @default(10) @map("skip_if_staff_replied_within_min")
   blockedKeywords             Json     @default("[]") @map("blocked_keywords")
-  persona                     String?  @db.Text
+  persona                     String?  @db.Text // cũ — đã gộp vào extraInstruction (hướng dẫn)
+  // Hướng dẫn cho AI (skill): vai trò, xưng hô, cách tư vấn… — viết tay hoặc tải file .md/.txt.
   extraInstruction            String?  @map("extra_instruction") @db.Text
+  guideFileName               String?  @map("guide_file_name") // tên file skill đã tải lên (nếu có)
   verifyGrounding             Boolean  @default(true) @map("verify_grounding")
   createdAt                   DateTime @default(now()) @map("created_at")
   updatedAt                   DateTime @updatedAt @map("updated_at")

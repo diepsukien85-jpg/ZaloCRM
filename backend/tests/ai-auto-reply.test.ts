@@ -40,7 +40,7 @@ const CONFIG_ROW = {
   triggerTags: ['AI trả lời'], hourStart: 7, hourEnd: 22,
   debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15,
   skipIfStaffRepliedWithinMin: 10, blockedKeywords: ['hoàn tiền'],
-  persona: null, extraInstruction: null, verifyGrounding: false,
+  persona: null, extraInstruction: null, guideFileName: null, verifyGrounding: false,
   createdAt: NOW, updatedAt: NOW,
 };
 
@@ -230,6 +230,19 @@ describe('evaluateConversation', () => {
     expect(aiServiceMock.generateText.mock.calls[0][3]).toContain('Kim Mỹ, xưng "chị"');
     expect(prismaMock.aiPlaybookEntry.findMany.mock.calls[0][0].where.OR).toEqual([{ zaloAccountId: null }, { zaloAccountId: 'za-1' }]);
     expect(prismaMock.aiAutoReplyLog.create.mock.calls.at(-1)[0].data.zaloAccountId).toBe('za-1');
+  });
+
+  it('hướng dẫn (skill) vào prompt, và vào nguồn kiểm duyệt để giá trong hướng dẫn không bị coi là bịa', async () => {
+    prime({ config: { verifyGrounding: true, extraInstruction: 'Xưng "chị", gọi khách "em". Nồi chiên 5L giá 890k.' } as any });
+    aiServiceMock.generateText
+      .mockResolvedValueOnce('{"action":"reply","reply":"Nồi 5L giá 890k em nhé","reason":"x"}')
+      .mockResolvedValueOnce('{"ok":true}');
+    sendMessage.mockResolvedValue({});
+    const r = await evaluateConversation('org-1', 'conv-1', { now: NOW });
+    expect(r.decision).toBe('sent');
+    expect(aiServiceMock.generateText.mock.calls[0][3]).toContain('<huong_dan_cua_shop>');
+    expect(aiServiceMock.generateText.mock.calls[0][3]).toContain('Nồi chiên 5L giá 890k');
+    expect(aiServiceMock.generateText.mock.calls[1][4]).toContain('Nồi chiên 5L giá 890k');
   });
 
   it('hết trần ngày → bỏ qua', async () => {

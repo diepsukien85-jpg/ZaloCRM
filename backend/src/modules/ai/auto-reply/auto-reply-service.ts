@@ -258,7 +258,7 @@ export async function evaluateConversation(
 
   let text = applyGuards(decision.reply, customerText);
   if (cfg.verifyGrounding) {
-    const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx) });
+    const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx) + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '') });
     if (!checked) {
       await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
       return { decision: 'error', reason: 'kiểm duyệt lỗi' };

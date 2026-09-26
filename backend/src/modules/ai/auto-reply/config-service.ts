@@ -13,6 +13,9 @@ export const DEFAULT_BLOCKED_KEYWORDS = [
   'công an', 'báo chí', 'tố cáo', 'bồi thường', 'bóc phốt', 'huỷ đơn', 'hủy đơn',
 ];
 
+/** Trần độ dài hướng dẫn (skill) — đủ cho một file SKILL.md dài, vẫn giữ prompt vừa phải. */
+export const GUIDE_MAX_CHARS = 20000;
+
 export type AutoReplyMode = 'auto' | 'dry_run';
 
 /** Cấu hình AI tự trả lời của MỘT nick (mỗi nick một bản riêng). */
@@ -28,8 +31,12 @@ export type AutoReplyProfile = {
   maxRepliesPerConvPerDay: number;
   skipIfStaffRepliedWithinMin: number;
   blockedKeywords: string[];
+  /** cũ — giao diện mới gộp vào extraInstruction. */
   persona: string | null;
+  /** Hướng dẫn cho AI (skill): vai trò, xưng hô, cách tư vấn… */
   extraInstruction: string | null;
+  /** Tên file skill đã tải lên (null nếu viết tay). */
+  guideFileName: string | null;
   verifyGrounding: boolean;
 };
 export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId'>>;
@@ -59,6 +66,7 @@ function normalize(row: Row): AutoReplyProfile {
     blockedKeywords: strArr(row.blockedKeywords),
     persona: row.persona,
     extraInstruction: row.extraInstruction,
+    guideFileName: row.guideFileName,
     verifyGrounding: row.verifyGrounding,
   };
 }
@@ -68,7 +76,7 @@ export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
   return {
     zaloAccountId, enabled: false, mode: 'dry_run', triggerTags: [], hourStart: 7, hourEnd: 22,
     debounceSeconds: 20, maxRepliesPerDay: 300, maxRepliesPerConvPerDay: 15, skipIfStaffRepliedWithinMin: 10,
-    blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, verifyGrounding: true,
+    blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, guideFileName: null, verifyGrounding: true,
   };
 }
 
@@ -106,7 +114,8 @@ export function validateProfileInput(input: ProfileInput): string | null {
   }
   if (input.triggerTags && input.triggerTags.length > 50) return 'Tối đa 50 thẻ kích hoạt';
   if (input.persona != null && input.persona.length > 1000) return 'Vai trò / xưng hô tối đa 1000 ký tự';
-  if (input.extraInstruction != null && input.extraInstruction.length > 4000) return 'Lời dặn riêng tối đa 4000 ký tự';
+  if (input.extraInstruction != null && input.extraInstruction.length > GUIDE_MAX_CHARS) return `Hướng dẫn cho AI tối đa ${GUIDE_MAX_CHARS.toLocaleString('vi-VN')} ký tự`;
+  if (input.guideFileName != null && (typeof input.guideFileName !== 'string' || input.guideFileName.length > 200)) return 'Tên file hướng dẫn không hợp lệ';
   if (input.verifyGrounding !== undefined && typeof input.verifyGrounding !== 'boolean') return 'verifyGrounding phải là true/false';
   return null;
 }
@@ -125,6 +134,7 @@ export async function saveProfile(orgId: string, zaloAccountId: string, input: P
     blockedKeywords: input.blockedKeywords?.map((t) => t.trim()).filter(Boolean),
     persona: input.persona === undefined ? undefined : (input.persona?.trim() || null),
     extraInstruction: input.extraInstruction === undefined ? undefined : (input.extraInstruction?.trim() || null),
+    guideFileName: input.guideFileName === undefined ? undefined : (input.guideFileName?.trim() || null),
     verifyGrounding: input.verifyGrounding,
   };
   const row = await prisma.aiAutoReplyProfile.upsert({
