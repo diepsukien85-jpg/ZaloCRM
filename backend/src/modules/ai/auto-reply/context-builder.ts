@@ -221,7 +221,12 @@ export function addressingRule(a: Addressing): string | null {
     : `XƯNG HÔ BẮT BUỘC: chưa rõ giới tính khách → gọi khách là "anh/chị", tự xưng "${self}". Nếu khách tự xưng rõ (vd "chị hỏi", "anh muốn") thì gọi theo đó. Quy tắc này đứng trên phần xưng hô trong HƯỚNG DẪN CỦA SHOP.`;
 }
 
-export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = [], references: GuideFile[] = [], addressing: Addressing = null, products = ''): string {
+export type PromptOptions = {
+  /** Hội thoại chưa có tin nào của shop → được chào / giới thiệu trợ lý AI một lần. */
+  firstMessage?: boolean;
+};
+
+export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = [], references: GuideFile[] = [], addressing: Addressing = null, products = '', opts: PromptOptions = {}): string {
   const g = guide?.trim() || '';
   const who = persona?.trim()
     || (g ? 'người trả lời khách của shop, đóng vai, xưng hô và tư vấn đúng như HƯỚNG DẪN CỦA SHOP ở cuối' : 'nhân viên chăm sóc khách hàng của shop, xưng "em", gọi khách là "anh/chị"');
@@ -234,7 +239,8 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
     '- Giá, phí ship, chính sách, khuyến mãi, tồn kho, thời gian giao: CHỈ lấy từ kho kịch bản, mẫu tin hoặc HƯỚNG DẪN CỦA SHOP. Không có thì KHÔNG nêu con số, nói sẽ kiểm tra và báo lại.',
     '- Không bịa thông tin sản phẩm, đơn hàng, lịch hẹn hay điều khách chưa nói.',
     '- Viết như người nhắn Zalo: ngắn gọn, tự nhiên, tối đa 4 câu trừ khi khách hỏi nhiều ý. Không dùng dấu gạch ngang dài, không markdown.',
-    '- Không chào lại từ đầu nếu hai bên đang giữa cuộc trò chuyện.',
+    '- Không chào lại từ đầu nếu hai bên đang giữa cuộc trò chuyện. Nếu cần chào / giới thiệu là trợ lý AI thì gộp gọn trong NỬA câu đầu rồi TRẢ LỜI NGAY điều khách hỏi; không chèn câu hỏi chung ("cần tìm món gì ạ?") khi khách đã nói rõ nhu cầu.',
+    '- Không dùng danh sách đánh số, gạch đầu dòng hay dòng trống; viết liền như người nhắn Zalo, mỗi mẫu gợi ý là một câu ngắn.',
     '- KHÔNG BAO GIỜ nhận là người thật. Khách hỏi thẳng có phải bot/AI không thì phải nói thật. Được tự giới thiệu là trợ lý AI nếu HƯỚNG DẪN CỦA SHOP yêu cầu; nếu hướng dẫn không nói gì thì không cần tự nhắc.',
     '- Không yêu cầu khách gửi mật khẩu, mã OTP, thông tin thẻ.',
     '- Chọn "handoff" (chuyển chủ shop xử lý) khi: khách bức xúc, khiếu nại, đòi hoàn tiền/đổi trả; khách muốn gặp người thật; việc cần chủ shop quyết (giá đặc biệt, công nợ, hoá đơn VAT, phí giao ngoài vùng…) hoặc thông tin không có trong ngữ cảnh; và các trường hợp HƯỚNG DẪN CỦA SHOP yêu cầu chuyển. Khi handoff, "reply" là MỘT câu ngắn báo khách đã ghi nhận và chủ shop sẽ nhắn lại (không hứa nhanh hơn hướng dẫn cho phép); để rỗng nếu không cần nói gì (vd tin chỉ là sticker).',
@@ -249,7 +255,8 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
     lines.push(
       '',
       'SẢN PHẨM TRONG KHO (tra từ hệ thống bán hàng ngay lúc này — nguồn giá/tồn kho chính xác nhất):',
-      '- Khách hỏi mua / tìm món: TƯ VẤN CỤ THỂ từ danh sách này: gợi ý 2-3 mẫu hợp nhu cầu nhất, nêu tên + giá lẻ + điểm nổi bật ngắn (lấy từ mô tả). Không trả lời chung chung kiểu "bên em có nhiều loại".',
+      '- Khách hỏi mua / tìm món: TƯ VẤN CỤ THỂ từ danh sách này: gợi ý 2-3 mẫu hợp nhu cầu nhất, nêu tên + giá lẻ + điểm nổi bật ngắn (lấy từ mô tả), rồi hỏi khách chọn mẫu nào. Không trả lời chung chung kiểu "bên em có nhiều loại". Cả tin tối đa khoảng 4-5 câu ngắn.',
+      '- Khách hỏi giá sỉ / số lượng mà chưa rõ mẫu: báo luôn giá theo mức số lượng của 1-2 mẫu phổ biến nhất khớp câu hỏi, rồi hỏi khách lấy mẫu nào.',
       '- Chỉ nêu giá CTV/NPP khi khách hỏi giá sỉ hoặc số lượng nhiều (theo đúng ngưỡng ghi trong danh sách). Không bao giờ nêu giá vốn.',
       '- Chỉ nói về sản phẩm có trong danh sách; không bịa món, không bịa giá, không hứa còn hàng số lượng lớn nếu tồn ít. Món "GẦN ĐÚNG" thì nói rõ kho chưa có đúng món khách hỏi rồi mới gợi ý món liên quan.',
       '- Muốn khách xem ảnh: điền id vào "productIds" (tối đa 3); hệ thống tự gửi ảnh sau tin nhắn, trong tin chỉ cần nói "gửi ảnh để anh/chị xem".',
@@ -285,6 +292,21 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
       '</bai_hoc>',
     );
   }
+  // Tự kiểm tra ở CUỐI prompt (mô hình bám phần cuối tốt nhất).
+  lines.push(
+    '',
+    'TỰ KIỂM TRA TRƯỚC KHI TRẢ LỜI:',
+    opts.firstMessage
+      ? '- Đây là tin ĐẦU TIÊN của shop trong hội thoại: được chào + giới thiệu ngắn (nếu hướng dẫn yêu cầu) trong nửa câu đầu, rồi trả lời ngay.'
+      : '- Hội thoại ĐÃ có tin của shop: KHÔNG chào lại, KHÔNG giới thiệu lại là trợ lý AI; vào thẳng câu trả lời.',
+    ...(products
+      ? [
+          '- Có SẢN PHẨM TRONG KHO khớp nhu cầu → trong tin PHẢI nêu tên + giá lẻ của 1-3 mẫu cụ thể (khách hỏi sỉ / số lượng → nêu cả giá theo mức CTV/NPP đúng ngưỡng). Gửi ảnh không thay cho việc nêu tên và giá.',
+        ]
+      : []),
+    '- Không danh sách đánh số / gạch đầu dòng; tối đa khoảng 5 câu ngắn; đúng xưng hô bắt buộc.',
+    '- Trả về đúng JSON như đã quy định.',
+  );
   return lines.join('\n');
 }
 

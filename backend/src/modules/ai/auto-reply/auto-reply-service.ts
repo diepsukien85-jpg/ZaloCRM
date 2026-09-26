@@ -344,7 +344,9 @@ export async function evaluateConversation(
 
   let raw: string;
   try {
-    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references, addressing, productsBlock), renderUserPrompt(ctx), 1000);
+    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references, addressing, productsBlock, {
+      firstMessage: !ctx.history.some((h) => h.startsWith('shop')),
+    }), renderUserPrompt(ctx), 1000);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
     return { decision: 'error', reason: 'gọi AI lỗi' };
