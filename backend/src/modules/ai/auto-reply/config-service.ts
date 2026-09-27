@@ -59,8 +59,11 @@ export type AutoReplyProfile = {
   /** Vòng tự học: rút bài học từ kết quả trả lời + phản hồi của chủ shop. */
   learningEnabled: boolean;
   lastLearnedAt: string | null;
+  /** "Học theo nick khác": nick mẫu đã chép hướng dẫn + bài học (null = tự cấu hình). */
+  clonedFromAccountId: string | null;
+  clonedAt: string | null;
 };
-export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId' | 'lastLearnedAt'>>;
+export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId' | 'lastLearnedAt' | 'clonedFromAccountId' | 'clonedAt'>>;
 
 const CACHE_MS = 30_000;
 /** zaloAccountId → profile (null = nick chưa cấu hình). */
@@ -112,6 +115,8 @@ function normalize(row: Row): AutoReplyProfile {
     learningEnabled: row.learningEnabled,
     lastLearnedAt: row.lastLearnedAt ? row.lastLearnedAt.toISOString() : null,
     verifyGrounding: row.verifyGrounding,
+    clonedFromAccountId: row.clonedFromAccountId,
+    clonedAt: row.clonedAt ? row.clonedAt.toISOString() : null,
   };
 }
 
@@ -123,6 +128,7 @@ export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
     blockedKeywords: [...DEFAULT_BLOCKED_KEYWORDS], persona: null, extraInstruction: null, guideFileName: null, guideFiles: [], verifyGrounding: true,
     addressByGender: true, selfPronoun: 'em', learningEnabled: true, lastLearnedAt: null,
     useProductCatalog: true, sendProductImages: true, notifyHandoff: true, handoffChatId: null, handoffPauseMinutes: 60,
+    clonedFromAccountId: null, clonedAt: null,
   };
 }
 

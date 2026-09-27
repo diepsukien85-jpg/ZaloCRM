@@ -5,6 +5,7 @@
  *   GET    /api/v1/ai/auto-reply/profiles/:accountId — cấu hình 1 nick (mặc định nếu chưa có)
  *   PUT    /api/v1/ai/auto-reply/profiles/:accountId — lưu cấu hình 1 nick (admin)
  *   DELETE /api/v1/ai/auto-reply/profiles/:accountId — xoá cấu hình 1 nick (admin)
+ *   POST   /api/v1/ai/auto-reply/profiles/:accountId/clone-from — học theo nick khác: chép hướng dẫn + bài học (admin)
  *   GET    /api/v1/ai/auto-reply/tags?accountIds=  — thẻ Zalo của nick đã chọn + Tag CRM (kèm số khách)
  *   GET    /api/v1/ai/auto-reply/playbook          — kho kịch bản (dùng chung + riêng từng nick)
  *   POST   /api/v1/ai/auto-reply/playbook          — thêm mục (admin)
@@ -32,6 +33,7 @@ import {
   validateProfileInput, type PlaybookInput, type ProfileInput,
 } from './config-service.js';
 import { evaluateConversation } from './auto-reply-service.js';
+import { CloneError, cloneProfileFrom } from './clone-service.js';
 import { isCatalogEnabled } from './catalog-service.js';
 import { defaultHandoffChatId, isTelegramConfigured, sendTelegram } from './handoff-notify.js';
 import { evaluateOutcomes, learnFromFeedback, qualityByDay, runDailyLearning, sanitizeLesson } from './learning-service.js';
@@ -96,6 +98,9 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
               accountName: a.displayName || a.phone || a.id.slice(0, 8),
               accountAvatar: a.avatarUrl,
               accountStatus: a.status,
+              clonedFromName: p.clonedFromAccountId
+                ? (() => { const s = accById.get(p.clonedFromAccountId); return s ? s.displayName || s.phone || s.id.slice(0, 8) : 'nick đã xoá'; })()
+                : null,
               today: todayOf(p.zaloAccountId),
               lessonCount: lessonsOf(p.zaloAccountId),
               quality7d: quality7(p.zaloAccountId),
@@ -142,6 +147,22 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       logger.error('[ai-auto-reply] save profile error:', err);
       return reply.status(500).send({ error: 'Không lưu được cấu hình' });
+    }
+  });
+
+  // Học theo nick khác: chép hướng dẫn / skill + bài học + kịch bản riêng của nick mẫu sang nick này.
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/clone-from', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const { sourceAccountId } = (request.body ?? {}) as { sourceAccountId?: unknown };
+    if (typeof sourceAccountId !== 'string' || !sourceAccountId) return reply.status(400).send({ error: 'Chưa chọn nick mẫu' });
+    try {
+      const res = await cloneProfileFrom(request.user!.orgId, accountId, sourceAccountId);
+      logger.info(`[ai-auto-reply] nick ${accountId} học theo ${sourceAccountId}: ${res.lessons} bài học, ${res.playbook} kịch bản`);
+      return res;
+    } catch (err) {
+      if (err instanceof CloneError) return reply.status(err.status).send({ error: err.message });
+      logger.error('[ai-auto-reply] clone profile error:', err);
+      return reply.status(500).send({ error: 'Không chép được cấu hình' });
     }
   });
 
@@ -443,7 +464,7 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
       lesson: await prisma.aiLesson.update({
         where: { id },
         // Chủ shop sửa tay thì coi như bài viết tay (không bị tự học gỡ đi).
-        data: { content, active: body.active as boolean | undefined, ...(content ? { source: 'manual' } : {}) },
+        data: { content, active: body.active as boolean | undefined, ...(content ? { source: 'manual', inheritedFromAccountId: null } : {}) },
       }),
     };
   });

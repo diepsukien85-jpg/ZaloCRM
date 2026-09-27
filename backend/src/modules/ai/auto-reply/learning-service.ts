@@ -123,21 +123,24 @@ export async function evaluateOutcomes(now = new Date(), limit = 200): Promise<n
 
 // ── 2. Bài học ─────────────────────────────────────────────────────────────
 
-export async function activeLessons(zaloAccountId: string): Promise<Array<{ id: string; content: string; source: string }>> {
+export async function activeLessons(zaloAccountId: string): Promise<Array<{ id: string; content: string; source: string; inheritedFromAccountId: string | null }>> {
   return prisma.aiLesson.findMany({
     where: { zaloAccountId, active: true },
-    orderBy: { updatedAt: 'desc' },
+    // Bài của chính nick (dạy riêng / tự học) giữ chỗ trước, bài chép từ nick mẫu sau — không bị trần 30 bài đẩy ra.
+    orderBy: [{ inheritedFromAccountId: { sort: 'asc', nulls: 'first' } }, { updatedAt: 'desc' }],
     take: MAX_ACTIVE_LESSONS,
-    select: { id: true, content: true, source: true },
+    select: { id: true, content: true, source: true, inheritedFromAccountId: true },
   });
 }
 
 /** Bài học do CHỦ SHOP đưa ra (dạy / tự viết / chấm 👎) — ưu tiên cao hơn skill. */
 export const OWNER_LESSON_SOURCES = ['teach', 'manual', 'feedback'];
 
-export function splitLessons(list: Array<{ content: string; source: string }>): { owner: string[]; auto: string[] } {
+export function splitLessons(list: Array<{ content: string; source: string; inheritedFromAccountId?: string | null }>): { owner: string[]; auto: string[] } {
+  const owner = list.filter((l) => OWNER_LESSON_SOURCES.includes(l.source));
   return {
-    owner: list.filter((l) => OWNER_LESSON_SOURCES.includes(l.source)).map((l) => l.content),
+    // Bài chép từ nick mẫu đứng TRƯỚC, bài dạy riêng cho nick này đứng SAU (prompt: điều ghi sau thắng).
+    owner: [...owner.filter((l) => l.inheritedFromAccountId), ...owner.filter((l) => !l.inheritedFromAccountId)].map((l) => l.content),
     auto: list.filter((l) => !OWNER_LESSON_SOURCES.includes(l.source)).map((l) => l.content),
   };
 }

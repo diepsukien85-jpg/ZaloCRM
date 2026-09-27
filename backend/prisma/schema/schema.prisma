@@ -2364,6 +2364,9 @@ model AiAutoReplyProfile {
   learningEnabled             Boolean  @default(true) @map("learning_enabled")
   lastLearnedAt               DateTime? @map("last_learned_at")
   verifyGrounding             Boolean  @default(true) @map("verify_grounding")
+  // "Học theo nick khác": đã chép hướng dẫn + bài học từ nick mẫu nào, lúc nào (chép xong là của riêng nick này).
+  clonedFromAccountId         String?  @map("cloned_from_account_id")
+  clonedAt                    DateTime? @map("cloned_at")
   createdAt                   DateTime @default(now()) @map("created_at")
   updatedAt                   DateTime @updatedAt @map("updated_at")
 
@@ -2434,6 +2437,8 @@ model AiLesson {
   source        String   @default("daily") // daily | feedback | manual
   active        Boolean  @default(true)
   evidence      Json     @default("[]") // id các lượt nhật ký làm căn cứ
+  // Chép từ nick mẫu nào ("Học theo nick khác"); null = bài học của chính nick. Sửa / dạy lại → null.
+  inheritedFromAccountId String? @map("inherited_from_account_id")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

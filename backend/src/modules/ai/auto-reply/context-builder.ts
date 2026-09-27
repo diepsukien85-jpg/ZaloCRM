@@ -301,7 +301,7 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
     lines.push(
       '',
       'CHỦ SHOP ĐÃ DẠY TRỰC TIẾP — ƯU TIÊN CAO HƠN HƯỚNG DẪN / SKILL / TÀI LIỆU / BÀI HỌC TỰ RÚT (chỉ đứng sau Quy tắc bắt buộc).',
-      'Khi hướng dẫn hay tài liệu nói khác, LÀM THEO điều chủ shop dạy dưới đây:',
+      'Khi hướng dẫn hay tài liệu nói khác, LÀM THEO điều chủ shop dạy dưới đây. Nếu hai điều dưới đây mâu thuẫn nhau, điều ghi SAU thắng (dạy riêng cho nick này, mới hơn):',
       '<chu_shop_day>',
       ...owner.map((l) => `- ${l.replace(/<\/?chu_shop_day>/g, '')}`),
       '</chu_shop_day>',

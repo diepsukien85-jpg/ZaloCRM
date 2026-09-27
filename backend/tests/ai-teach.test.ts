@@ -72,7 +72,7 @@ describe('buổi dạy', () => {
     aiServiceMock.generateText.mockResolvedValue('{"ops":[{"op":"update","id":"l1","content":"Chỉ gửi 1 link nhóm mỹ phẩm, tối đa 2 câu"},{"op":"add","content":"Ship Hà Nội 2-3 ngày"},{"op":"add","content":"Hỏi số lượng trước khi báo giá sỉ"}]}');
     const r = await T.finishTeaching('o', 'za', [{ role: 'owner', content: 'dạy' }], [{ op: 'add', content: 'abc abc abc' }]);
     expect(r).toMatchObject({ added: 1, updated: 1, removed: 0 });
-    expect(prismaMock.aiLesson.updateMany.mock.calls[0][0].data).toEqual({ content: 'Chỉ gửi 1 link nhóm mỹ phẩm, tối đa 2 câu', source: 'teach' });
+    expect(prismaMock.aiLesson.updateMany.mock.calls[0][0].data).toEqual({ content: 'Chỉ gửi 1 link nhóm mỹ phẩm, tối đa 2 câu', source: 'teach', inheritedFromAccountId: null });
     expect(prismaMock.aiLesson.create.mock.calls[0][0].data).toMatchObject({ content: 'Hỏi số lượng trước khi báo giá sỉ', source: 'teach' });
   });
   it('finishTeaching: lượt gộp lỗi → vẫn lưu đề xuất', async () => {

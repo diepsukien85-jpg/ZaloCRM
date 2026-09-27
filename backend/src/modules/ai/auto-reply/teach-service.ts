@@ -218,7 +218,7 @@ export async function finishTeaching(orgId: string, zaloAccountId: string, trans
       await prisma.aiLesson.updateMany({ where: { id: o.id, zaloAccountId }, data: { active: false } });
       removed++;
     } else if (o.op === 'update' && o.id && o.content) {
-      await prisma.aiLesson.updateMany({ where: { id: o.id, zaloAccountId }, data: { content: o.content, source: 'teach' } });
+      await prisma.aiLesson.updateMany({ where: { id: o.id, zaloAccountId }, data: { content: o.content, source: 'teach', inheritedFromAccountId: null } });
       updated++;
     } else if (o.op === 'add' && o.content && !seen.has(fold(o.content))) {
       await prisma.aiLesson.create({ data: { orgId, zaloAccountId, content: o.content, source: 'teach' } });

@@ -36,6 +36,10 @@
           <span v-if="!p.triggerTags.length" class="text-warning">chưa chọn thẻ</span>
           <v-chip v-for="t in p.triggerTags" :key="t" size="x-small" class="mr-1" variant="tonal">{{ cleanTag(t) }}</v-chip>
         </div>
+        <div v-if="p.clonedFromName" class="aar-card-row">
+          <span class="aar-card-label">Học theo:</span>
+          <v-chip size="x-small" color="deep-purple" variant="tonal" prepend-icon="mdi-account-school-outline">{{ p.clonedFromName }}</v-chip>
+        </div>
         <div class="aar-card-row">
           <span class="aar-card-label">Hướng dẫn:</span>
           <span class="aar-ellipsis">{{ guideSummary(p) }}</span>
@@ -276,6 +280,37 @@
               Khi chuyển người, AI vẫn nói một câu với khách (vd "em ghi nhận rồi, anh Mẫn sẽ nhắn lại"), hội thoại giữ ở "Chưa rep",
               và gửi Telegram theo mẫu: mức KHẨN/THƯỜNG, khách, lý do, tin khách nhắn, link hội thoại. Để trống chat id = dùng chat mặc định của server.
             </p>
+
+            <!-- Học theo nick khác — thay cho tải skill -->
+            <template v-if="isAdmin && cloneSources.length">
+              <div class="aar-step mt-5">Học theo nick đã dạy giỏi</div>
+              <p class="aar-hint">
+                Không cần tải skill: chọn một nick đã dạy tốt (vd Minh Mẫn), nick này sẽ chép <strong>toàn bộ</strong> hướng dẫn, tài liệu tham khảo,
+                bài học và bộ khung riêng của nick đó. Chép xong là <strong>của riêng nick này</strong>: dạy thêm xưng hô, tên người bán… bằng nút
+                "Dạy cho AI" chỉ áp dụng cho nick này, không ảnh hưởng nick mẫu. Thẻ kích hoạt, bật/tắt và Telegram của nick này giữ nguyên.
+              </p>
+              <v-alert v-if="form.clonedFromAccountId" type="info" variant="tonal" density="compact" class="mb-2">
+                Đang học theo <strong>{{ accountName(form.clonedFromAccountId) || 'nick đã xoá' }}</strong>
+                <span v-if="form.clonedAt"> · chép lúc {{ fmtTime(form.clonedAt) }}</span>.
+                Muốn lấy thêm những gì nick mẫu mới học, bấm "Cập nhật lại" (bài dạy riêng cho nick này vẫn giữ).
+              </v-alert>
+              <div class="d-flex align-center flex-wrap" style="gap: 8px;">
+                <v-select
+                  v-model="cloneSource" :items="cloneSources" label="Chọn nick mẫu"
+                  density="compact" hide-details style="max-width: 320px; min-width: 220px;"
+                />
+                <v-btn color="deep-purple" variant="flat" prepend-icon="mdi-account-school-outline" :disabled="!cloneSource" :loading="cloning" @click="cloneFrom">
+                  {{ cloneSource && cloneSource === form.clonedFromAccountId ? 'Cập nhật lại từ nick này' : 'Học theo nick này' }}
+                </v-btn>
+              </div>
+              <v-alert v-if="cloneDone" type="success" variant="tonal" density="compact" class="mt-2" closable @click:close="cloneDone = null">
+                Đã học theo <strong>{{ cloneDone.sourceName }}</strong>: hướng dẫn + {{ cloneDone.guideFiles }} tài liệu, {{ cloneDone.lessons }} bài học,
+                {{ cloneDone.playbook }} mục bộ khung. Bước tiếp: chọn thẻ kích hoạt của nick này, bấm <strong>Lưu cấu hình</strong>, rồi dạy xưng hô riêng.
+                <div class="mt-2">
+                  <v-btn size="small" color="deep-purple" variant="tonal" prepend-icon="mdi-human-male-board" @click="openTeach">Dạy xưng hô riêng cho nick này</v-btn>
+                </div>
+              </v-alert>
+            </template>
 
             <!-- Hướng dẫn cho AI (skill) — viết tay hoặc tải file -->
             <div class="aar-step mt-5 d-flex align-center flex-wrap" style="gap: 8px;">
@@ -624,9 +659,10 @@ interface Profile {
   addressByGender: boolean; selfPronoun: string;
   useProductCatalog: boolean; sendProductImages: boolean;
   notifyHandoff: boolean; handoffChatId: string | null; handoffPauseMinutes: number;
+  clonedFromAccountId: string | null; clonedAt: string | null;
 }
 interface ProfileCard extends Profile {
-  accountName: string; accountStatus: string; today: Record<string, number>;
+  accountName: string; accountStatus: string; today: Record<string, number>; clonedFromName: string | null;
   lessonCount: number; quality7d: number | null;
 }
 interface Lesson { id: string; content: string; source: string; active: boolean }
@@ -704,7 +740,41 @@ const form = reactive<Omit<Profile, 'zaloAccountId'>>({
   learningEnabled: true, lastLearnedAt: null,
   addressByGender: true, selfPronoun: 'em',
   useProductCatalog: true, sendProductImages: true, notifyHandoff: true, handoffChatId: null, handoffPauseMinutes: 60,
+  clonedFromAccountId: null, clonedAt: null,
 });
+
+// ── Học theo nick khác ──
+const cloneSource = ref<string | null>(null);
+const cloning = ref(false);
+const cloneDone = ref<{ sourceName: string; lessons: number; playbook: number; guideFiles: number } | null>(null);
+const cloneSources = computed(() => profiles.value
+  .filter((p) => p.zaloAccountId !== editingAccountId.value)
+  .map((p) => ({ title: `${p.accountName} · ${p.lessonCount} bài học`, value: p.zaloAccountId })));
+async function cloneFrom() {
+  const target = editingAccountId.value;
+  const src = cloneSource.value;
+  if (!target || !src) return;
+  const again = src === form.clonedFromAccountId;
+  const msg = again
+    ? `Cập nhật lại từ "${accountName(src)}"? Hướng dẫn + tài liệu của "${accountName(target)}" được thay bằng bản mới nhất của nick mẫu, bài học đã chép được làm mới. Bài bạn dạy riêng cho "${accountName(target)}" vẫn giữ.`
+    : `Cho "${accountName(target)}" học theo "${accountName(src)}"? Hướng dẫn, tài liệu, bài học và bộ khung của nick mẫu sẽ được chép sang (hướng dẫn hiện tại của "${accountName(target)}" bị thay). Thẻ kích hoạt, bật/tắt, Telegram giữ nguyên.`;
+  if (!window.confirm(msg)) return;
+  // Giữ phần người dùng đang chọn dở (chưa lưu) của riêng nick này.
+  const keep = { triggerTags: [...form.triggerTags], enabled: form.enabled, handoffChatId: form.handoffChatId };
+  cloning.value = true;
+  try {
+    const { data } = await api.post(`/ai/auto-reply/profiles/${target}/clone-from`, { sourceAccountId: src });
+    await loadEditor(target);
+    Object.assign(form, keep);
+    editingConfigured.value = true;
+    cloneDone.value = { sourceName: data.sourceName, lessons: data.lessons, playbook: data.playbook, guideFiles: data.guideFiles };
+    await Promise.all([loadProfiles(), loadPlaybook()]);
+  } catch (err) {
+    toast.error(errorText(err, 'Không chép được từ nick mẫu'));
+  } finally {
+    cloning.value = false;
+  }
+}
 const server = ref<{ catalog: boolean; telegram: boolean; defaultChatId: string | null }>({ catalog: false, telegram: false, defaultChatId: null });
 const testingTg = ref(false);
 async function testTelegram() {
@@ -1148,13 +1218,18 @@ async function openProfile(accountId: string) {
   editingConfigured.value = true;
   newAccountId.value = null;
   editorOpen.value = true;
+  cloneDone.value = null;
+  cloneSource.value = null;
   try {
     await loadEditor(accountId);
+    cloneSource.value = form.clonedFromAccountId;
   } catch (err) {
     toast.error(errorText(err, 'Không tải được cấu hình nick'));
   }
 }
 function openNew() {
+  cloneDone.value = null;
+  cloneSource.value = null;
   editingAccountId.value = null;
   newAccountId.value = null;
   editingConfigured.value = false;
