@@ -195,6 +195,37 @@
               Chạy thử: AI viết câu trả lời vào nhật ký nhưng KHÔNG gửi cho khách.
             </p>
 
+            <!-- Học theo nick khác — thay cho tải skill -->
+            <v-sheet v-if="isAdmin && cloneSources.length" class="aar-clone mb-4" rounded border>
+              <div class="aar-step">Học theo nick đã dạy giỏi <span class="aar-hint">(thay cho tải skill)</span></div>
+              <p class="aar-hint">
+                Không cần tải skill: chọn một nick đã dạy tốt (vd Minh Mẫn), nick này sẽ chép <strong>toàn bộ</strong> hướng dẫn, tài liệu tham khảo,
+                bài học và bộ khung riêng của nick đó. Chép xong là <strong>của riêng nick này</strong>: dạy thêm xưng hô, tên người bán… bằng nút
+                "Dạy cho AI" chỉ áp dụng cho nick này, không ảnh hưởng nick mẫu. Thẻ kích hoạt, bật/tắt và Telegram của nick này giữ nguyên.
+              </p>
+              <v-alert v-if="form.clonedFromAccountId" type="info" variant="tonal" density="compact" class="mb-2">
+                Đang học theo <strong>{{ accountName(form.clonedFromAccountId) || 'nick đã xoá' }}</strong>
+                <span v-if="form.clonedAt"> · chép lúc {{ fmtTime(form.clonedAt) }}</span>.
+                Muốn lấy thêm những gì nick mẫu mới học, bấm "Cập nhật lại" (bài dạy riêng cho nick này vẫn giữ).
+              </v-alert>
+              <div class="d-flex align-center flex-wrap" style="gap: 8px;">
+                <v-select
+                  v-model="cloneSource" :items="cloneSources" label="Chọn nick mẫu"
+                  density="compact" hide-details style="max-width: 320px; min-width: 220px;"
+                />
+                <v-btn color="deep-purple" variant="flat" prepend-icon="mdi-account-school-outline" :disabled="!cloneSource" :loading="cloning" @click="cloneFrom">
+                  {{ cloneSource && cloneSource === form.clonedFromAccountId ? 'Cập nhật lại từ nick này' : 'Học theo nick này' }}
+                </v-btn>
+              </div>
+              <v-alert v-if="cloneDone" type="success" variant="tonal" density="compact" class="mt-2" closable @click:close="cloneDone = null">
+                Đã học theo <strong>{{ cloneDone.sourceName }}</strong>: hướng dẫn + {{ cloneDone.guideFiles }} tài liệu, {{ cloneDone.lessons }} bài học,
+                {{ cloneDone.playbook }} mục bộ khung. Bước tiếp: chọn thẻ kích hoạt của nick này, bấm <strong>Lưu cấu hình</strong>, rồi dạy xưng hô riêng.
+                <div class="mt-2">
+                  <v-btn size="small" color="deep-purple" variant="tonal" prepend-icon="mdi-human-male-board" @click="openTeach">Dạy xưng hô riêng cho nick này</v-btn>
+                </div>
+              </v-alert>
+            </v-sheet>
+
             <!-- Thẻ kích hoạt của đúng nick này -->
             <div class="aar-step mt-4">Thẻ kích hoạt</div>
             <div v-if="loadingTags" class="aar-hint">Đang tải thẻ…</div>
@@ -280,37 +311,6 @@
               Khi chuyển người, AI vẫn nói một câu với khách (vd "em ghi nhận rồi, anh Mẫn sẽ nhắn lại"), hội thoại giữ ở "Chưa rep",
               và gửi Telegram theo mẫu: mức KHẨN/THƯỜNG, khách, lý do, tin khách nhắn, link hội thoại. Để trống chat id = dùng chat mặc định của server.
             </p>
-
-            <!-- Học theo nick khác — thay cho tải skill -->
-            <template v-if="isAdmin && cloneSources.length">
-              <div class="aar-step mt-5">Học theo nick đã dạy giỏi</div>
-              <p class="aar-hint">
-                Không cần tải skill: chọn một nick đã dạy tốt (vd Minh Mẫn), nick này sẽ chép <strong>toàn bộ</strong> hướng dẫn, tài liệu tham khảo,
-                bài học và bộ khung riêng của nick đó. Chép xong là <strong>của riêng nick này</strong>: dạy thêm xưng hô, tên người bán… bằng nút
-                "Dạy cho AI" chỉ áp dụng cho nick này, không ảnh hưởng nick mẫu. Thẻ kích hoạt, bật/tắt và Telegram của nick này giữ nguyên.
-              </p>
-              <v-alert v-if="form.clonedFromAccountId" type="info" variant="tonal" density="compact" class="mb-2">
-                Đang học theo <strong>{{ accountName(form.clonedFromAccountId) || 'nick đã xoá' }}</strong>
-                <span v-if="form.clonedAt"> · chép lúc {{ fmtTime(form.clonedAt) }}</span>.
-                Muốn lấy thêm những gì nick mẫu mới học, bấm "Cập nhật lại" (bài dạy riêng cho nick này vẫn giữ).
-              </v-alert>
-              <div class="d-flex align-center flex-wrap" style="gap: 8px;">
-                <v-select
-                  v-model="cloneSource" :items="cloneSources" label="Chọn nick mẫu"
-                  density="compact" hide-details style="max-width: 320px; min-width: 220px;"
-                />
-                <v-btn color="deep-purple" variant="flat" prepend-icon="mdi-account-school-outline" :disabled="!cloneSource" :loading="cloning" @click="cloneFrom">
-                  {{ cloneSource && cloneSource === form.clonedFromAccountId ? 'Cập nhật lại từ nick này' : 'Học theo nick này' }}
-                </v-btn>
-              </div>
-              <v-alert v-if="cloneDone" type="success" variant="tonal" density="compact" class="mt-2" closable @click:close="cloneDone = null">
-                Đã học theo <strong>{{ cloneDone.sourceName }}</strong>: hướng dẫn + {{ cloneDone.guideFiles }} tài liệu, {{ cloneDone.lessons }} bài học,
-                {{ cloneDone.playbook }} mục bộ khung. Bước tiếp: chọn thẻ kích hoạt của nick này, bấm <strong>Lưu cấu hình</strong>, rồi dạy xưng hô riêng.
-                <div class="mt-2">
-                  <v-btn size="small" color="deep-purple" variant="tonal" prepend-icon="mdi-human-male-board" @click="openTeach">Dạy xưng hô riêng cho nick này</v-btn>
-                </div>
-              </v-alert>
-            </template>
 
             <!-- Hướng dẫn cho AI (skill) — viết tay hoặc tải file -->
             <div class="aar-step mt-5 d-flex align-center flex-wrap" style="gap: 8px;">
@@ -1367,6 +1367,7 @@ onMounted(loadAll);
 .aar-step { font-weight: 600; margin-bottom: 8px; }
 .aar-taggroup-title { font-size: 13px; margin-bottom: 4px; }
 .aar-count { margin-left: 6px; font-size: 11px; opacity: 0.7; }
+.aar-clone { padding: 12px 14px; border-color: rgba(103, 58, 183, 0.45) !important; background: rgba(103, 58, 183, 0.05); }
 .aar-hint { font-size: 13px; color: rgba(var(--v-theme-on-surface), 0.65); margin: 4px 0 8px; }
 .aar-reply { white-space: pre-wrap; margin-top: 4px; }
 .aar-nowrap { white-space: nowrap; }
