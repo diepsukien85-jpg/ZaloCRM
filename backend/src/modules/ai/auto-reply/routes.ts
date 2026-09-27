@@ -35,6 +35,7 @@ import { evaluateConversation } from './auto-reply-service.js';
 import { isCatalogEnabled } from './catalog-service.js';
 import { defaultHandoffChatId, isTelegramConfigured, sendTelegram } from './handoff-notify.js';
 import { evaluateOutcomes, learnFromFeedback, qualityByDay, runDailyLearning, sanitizeLesson } from './learning-service.js';
+import { finishTeaching, teachTurn, trySimulate, type LessonOp, type TeachTurn } from './teach-service.js';
 
 const ADMIN = { preHandler: requireRole('owner', 'admin') };
 
@@ -318,6 +319,67 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
       return { ok: true };
     } catch (err: any) {
       return reply.status(400).send({ error: `Gửi Telegram lỗi: ${err?.message ?? err}` });
+    }
+  });
+
+  // ── Dạy cho AI (trò chuyện) ─────────────────────────────────────────────
+
+  const readTeachBody = (body: unknown) => {
+    const b = (body ?? {}) as { transcript?: unknown; pending?: unknown; text?: unknown; gender?: unknown };
+    const transcript: TeachTurn[] = Array.isArray(b.transcript)
+      ? b.transcript
+          .filter((m: any) => m && ['owner', 'teacher', 'customer', 'bot'].includes(m.role) && typeof m.content === 'string')
+          .slice(-40)
+          .map((m: any) => ({ role: m.role, content: String(m.content).slice(0, 3000) }))
+      : [];
+    const pending = (Array.isArray(b.pending) ? b.pending : []) as LessonOp[];
+    const gender: 'male' | 'female' | null = b.gender === 'male' || b.gender === 'female' ? b.gender : null;
+    return { transcript, pending, text: typeof b.text === 'string' ? b.text.trim().slice(0, 1500) : '', gender };
+  };
+  const teachGuard = async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    if (!(await orgAccount(request.user!.orgId, accountId))) {
+      reply.status(404).send({ error: 'Không tìm thấy nick Zalo' });
+      return null;
+    }
+    return accountId;
+  };
+
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/teach', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const accountId = await teachGuard(request, reply);
+    if (!accountId) return;
+    const { transcript, pending } = readTeachBody(request.body);
+    if (!transcript.some((m) => m.role === 'owner')) return reply.status(400).send({ error: 'Chưa có lời dạy' });
+    try {
+      return await teachTurn(request.user!.orgId, accountId, transcript, pending);
+    } catch (err: any) {
+      logger.warn('[ai-teach] lượt dạy lỗi:', err);
+      return reply.status(400).send({ error: err?.message ?? 'Dạy không thành công' });
+    }
+  });
+
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/teach/try', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const accountId = await teachGuard(request, reply);
+    if (!accountId) return;
+    const { transcript, pending, text, gender } = readTeachBody(request.body);
+    if (!text) return reply.status(400).send({ error: 'Chưa nhập câu khách hỏi' });
+    try {
+      return await trySimulate(request.user!.orgId, accountId, text, pending, gender, transcript);
+    } catch (err: any) {
+      logger.warn('[ai-teach] thử hỏi lỗi:', err);
+      return reply.status(400).send({ error: err?.message ?? 'Thử không thành công' });
+    }
+  });
+
+  app.post('/api/v1/ai/auto-reply/profiles/:accountId/teach/finish', ADMIN, async (request: FastifyRequest, reply: FastifyReply) => {
+    const accountId = await teachGuard(request, reply);
+    if (!accountId) return;
+    const { transcript, pending } = readTeachBody(request.body);
+    try {
+      return await finishTeaching(request.user!.orgId, accountId, transcript, pending);
+    } catch (err: any) {
+      logger.error('[ai-teach] lưu buổi dạy lỗi:', err);
+      return reply.status(500).send({ error: 'Lưu bài học không thành công' });
     }
   });
 

@@ -24,7 +24,7 @@ import { applyContactAggregateFromMessage, applyFriendAggregate } from '../../co
 import { getAiConfig, getProviderApiKey, generateText } from '../ai-service.js';
 import { parseOffsetMinutes, orgDayRange } from '../daily-brief-service.js';
 import { getProfile } from './config-service.js';
-import { activeLessons, startLearningScheduler } from './learning-service.js';
+import { activeLessons, splitLessons, startLearningScheduler } from './learning-service.js';
 import { isCatalogEnabled, renderProducts, searchProducts, type CatalogProduct, type ProductQuery } from './catalog-service.js';
 import { notifyHandoff } from './handoff-notify.js';
 import { sendToThread } from '../../api/public-api-routes.js';
@@ -375,7 +375,9 @@ export async function evaluateConversation(
     ? { selfPronoun: cfg.selfPronoun || 'em', gender: await resolveCustomerGender(conv) }
     : null;
   // Vòng tự học: bài học đang bật của nick này.
-  const lessons = cfg.learningEnabled ? (await activeLessons(conv.zaloAccountId)).map((l) => l.content) : [];
+  // Bài chủ shop dạy (teach/manual/feedback) luôn dùng; bài AI tự rút chỉ khi bật tự học.
+  const { owner: ownerLessons, auto: autoLessons } = splitLessons(await activeLessons(conv.zaloAccountId));
+  const lessons = cfg.learningEnabled ? autoLessons : [];
   const ctx = await buildAutoReplyContext({ orgId, conversationId, zaloAccountId: conv.zaloAccountId, contactId: conv.contactId, pendingCustomerText: customerText, tags });
 
   // Tra kho thật (bot-noi-bo): AI tách từ khoá sản phẩm → tìm hàng còn tồn + giá theo mức.
@@ -395,6 +397,7 @@ export async function evaluateConversation(
   try {
     raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references, addressing, productsBlock, {
       firstMessage: !ctx.history.some((h) => h.startsWith('shop')),
+      ownerLessons,
     }), renderUserPrompt(ctx), 1000);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
@@ -413,7 +416,7 @@ export async function evaluateConversation(
       + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
       + (references.length ? `\n\n${renderReferences(references)}` : '')
       + (productsBlock ? `\n\n${productsBlock}` : '')
-      + (lessons.length ? `\n\n<bai_hoc>\n${lessons.map((l) => `- ${l}`).join('\n')}\n</bai_hoc>` : '') });
+      + ([...ownerLessons, ...lessons].length ? `\n\n<bai_hoc>\n${[...ownerLessons, ...lessons].map((l) => `- ${l}`).join('\n')}\n</bai_hoc>` : '') });
     if (!checked) {
       await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
       return { decision: 'error', reason: 'kiểm duyệt lỗi' };

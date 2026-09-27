@@ -351,6 +351,11 @@
               <v-spacer />
               <v-btn
                 v-if="isAdmin && editingConfigured"
+                size="small" variant="flat" color="deep-purple" prepend-icon="mdi-human-male-board"
+                @click="openTeach"
+              >Dạy cho AI</v-btn>
+              <v-btn
+                v-if="isAdmin && editingConfigured"
                 size="small" variant="tonal" color="primary" prepend-icon="mdi-school-outline"
                 :loading="learning" :disabled="!form.learningEnabled" @click="learnNow"
               >Học ngay</v-btn>
@@ -370,6 +375,9 @@
               <template v-if="editingProfile?.lastLearnedAt"> Lần học gần nhất: {{ fmtTime(editingProfile.lastLearnedAt) }}.</template>
             </p>
 
+            <v-alert v-if="learnResult" :type="learnResult.ok ? 'success' : 'info'" variant="tonal" density="compact" closable class="mb-2" @click:close="learnResult = null">
+              {{ learnResult.text }}
+            </v-alert>
             <template v-if="editingConfigured">
               <div class="aar-taggroup-title">Chất lượng 14 ngày (tốt / (tốt + chưa tốt))</div>
               <div class="aar-quality">
@@ -386,8 +394,8 @@
               </div>
               <div v-if="lessons.length === 0" class="aar-hint">Chưa có bài học nào. Bài học sẽ xuất hiện sau khi AI trả lời khách và được chấm.</div>
               <div v-for="l in lessons" :key="l.id" class="aar-lesson" :class="{ 'aar-lesson-off': !l.active }">
-                <v-chip size="x-small" variant="tonal" :color="l.source === 'manual' ? 'primary' : l.source === 'feedback' ? 'warning' : 'info'" class="mr-2">
-                  {{ l.source === 'manual' ? 'tự viết' : l.source === 'feedback' ? 'từ phản hồi' : 'tự học' }}
+                <v-chip size="x-small" variant="tonal" :color="l.source === 'manual' ? 'primary' : l.source === 'teach' ? 'deep-purple' : l.source === 'feedback' ? 'warning' : 'info'" class="mr-2">
+                  {{ ({ manual: 'tự viết', feedback: 'từ phản hồi', teach: 'đã dạy', daily: 'tự học' } as Record<string, string>)[l.source] || l.source }}
                 </v-chip>
                 <span class="aar-lesson-text">{{ l.content }}</span>
                 <template v-if="isAdmin">
@@ -439,6 +447,77 @@
           <v-spacer />
           <v-btn variant="text" @click="editorOpen = false">Huỷ</v-btn>
           <v-btn v-if="isAdmin" color="primary" variant="flat" :disabled="!editingAccountId" :loading="saving" @click="saveProfile">Lưu cấu hình</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- ════════ Dạy cho AI (trò chuyện) ════════ -->
+    <v-dialog v-model="teachOpen" max-width="1100" persistent scrollable>
+      <v-card class="teach-card">
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="deep-purple">mdi-human-male-board</v-icon>
+          Dạy cho AI · nick <strong class="ml-1">{{ accountName(editingAccountId) }}</strong>
+          <v-spacer />
+          <v-btn icon="mdi-close" variant="text" size="small" @click="closeTeach(false)" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="teach-body">
+          <div class="teach-chat">
+            <div ref="teachScroll" class="teach-messages">
+              <div v-if="teachMsgs.length === 0" class="aar-hint teach-empty">
+                Dạy AI bằng lời thường, ví dụ: <em>"Khách hỏi link nhóm Zalo thì phải nói rõ link đó là nhóm nào, của nick nào"</em>,
+                hoặc <em>"Khách hỏi giá sỉ mà chưa nói số lượng thì hỏi số lượng trước"</em>.<br />
+                Muốn xem bot đã hiểu chưa: gõ một câu như khách rồi bấm <strong>Thử hỏi như khách</strong>, bot sẽ trả lời bằng các bài học đang dạy.
+                Chê chỗ nào thì dạy tiếp chỗ đó. Xong bấm <strong>Kết thúc & lưu</strong>.
+              </div>
+              <div v-for="(m, i) in teachMsgs" :key="i" class="teach-msg" :class="'teach-' + m.role">
+                <div class="teach-who">{{ ({ owner: 'Anh dạy', teacher: 'AI trợ giảng', customer: 'Khách (thử)', bot: 'Bot trả lời thử' } as Record<string, string>)[m.role] }}</div>
+                <div class="teach-text">{{ m.content }}</div>
+              </div>
+              <div v-if="teachBusy" class="teach-msg teach-teacher"><div class="teach-text">…</div></div>
+            </div>
+            <div class="teach-input">
+              <v-textarea
+                v-model="teachText" rows="2" auto-grow max-rows="6" hide-details density="compact"
+                placeholder="Gõ lời dạy, hoặc gõ câu khách hỏi để thử…" @keydown.enter.exact.prevent="sendTeach"
+              />
+              <div class="aar-row mt-2">
+                <v-btn color="deep-purple" variant="flat" size="small" prepend-icon="mdi-send" :loading="teachBusy === 'teach'" :disabled="!!teachBusy || !teachText.trim()" @click="sendTeach">Gửi lời dạy</v-btn>
+                <v-btn variant="tonal" size="small" prepend-icon="mdi-account-question-outline" :loading="teachBusy === 'try'" :disabled="!!teachBusy || !teachText.trim()" @click="tryAsCustomer">Thử hỏi như khách</v-btn>
+                <v-btn-toggle v-model="tryGender" density="compact" variant="outlined" divided mandatory color="primary">
+                  <v-btn value="female" size="x-small">Khách nữ</v-btn>
+                  <v-btn value="male" size="x-small">Khách nam</v-btn>
+                  <v-btn value="" size="x-small">Chưa rõ</v-btn>
+                </v-btn-toggle>
+                <v-spacer />
+                <v-btn size="x-small" variant="text" @click="resetTryConversation">Làm mới hội thoại thử</v-btn>
+              </div>
+            </div>
+          </div>
+          <div class="teach-side">
+            <div class="aar-step">Bài học sẽ lưu ({{ teachOps.length }})</div>
+            <p class="aar-hint">AI tự cập nhật danh sách này sau mỗi lời dạy: ưu tiên sửa bài cũ cùng chủ đề thay vì thêm mới, để bộ bài học luôn gọn.</p>
+            <div v-if="teachOps.length === 0" class="aar-hint">Chưa có thay đổi.</div>
+            <div v-for="(o, i) in teachOps" :key="i" class="teach-op" :class="'teach-op-' + o.op">
+              <v-chip size="x-small" variant="flat" :color="o.op === 'add' ? 'success' : o.op === 'update' ? 'primary' : 'error'">
+                {{ o.op === 'add' ? 'Thêm' : o.op === 'update' ? 'Sửa' : 'Bỏ' }}
+              </v-chip>
+              <div class="teach-op-text">
+                <div v-if="o.before" class="teach-op-before">{{ o.before }}</div>
+                <div v-if="o.content">{{ o.content }}</div>
+              </div>
+              <v-btn size="x-small" variant="text" icon="mdi-close" title="Bỏ thay đổi này" @click="teachOps.splice(i, 1)" />
+            </div>
+          </div>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions>
+          <span class="aar-hint ml-2">Chưa lưu gì cho tới khi bấm Kết thúc & lưu.</span>
+          <v-spacer />
+          <v-btn variant="text" @click="closeTeach(false)">Đóng không lưu</v-btn>
+          <v-btn color="deep-purple" variant="flat" prepend-icon="mdi-content-save-check" :loading="teachSaving" :disabled="!!teachBusy" @click="closeTeach(true)">
+            Kết thúc & lưu bài học
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -638,6 +717,105 @@ const quality = ref<DayQuality[]>([]);
 const newLesson = ref('');
 const learning = ref(false);
 const editingProfile = computed(() => profiles.value.find((p) => p.zaloAccountId === editingAccountId.value) ?? null);
+const learnResult = ref<{ ok: boolean; text: string } | null>(null);
+
+// ── Dạy cho AI ──
+type TeachMsg = { role: 'owner' | 'teacher' | 'customer' | 'bot'; content: string };
+type TeachOp = { op: 'add' | 'update' | 'remove'; id?: string; content?: string; before?: string | null };
+const teachOpen = ref(false);
+const teachMsgs = ref<TeachMsg[]>([]);
+const teachOps = ref<TeachOp[]>([]);
+const teachText = ref('');
+const teachBusy = ref<'' | 'teach' | 'try'>('');
+const teachSaving = ref(false);
+const tryGender = ref<'female' | 'male' | ''>('female');
+const teachScroll = ref<HTMLElement | null>(null);
+
+function scrollTeach() {
+  setTimeout(() => { if (teachScroll.value) teachScroll.value.scrollTop = teachScroll.value.scrollHeight; }, 30);
+}
+function openTeach() {
+  teachMsgs.value = [];
+  teachOps.value = [];
+  teachText.value = '';
+  teachOpen.value = true;
+}
+function teachPayload(extra: Record<string, unknown> = {}) {
+  return {
+    transcript: teachMsgs.value.map((m) => ({ role: m.role, content: m.content })),
+    pending: teachOps.value.map(({ op, id, content }) => ({ op, id, content })),
+    ...extra,
+  };
+}
+async function sendTeach() {
+  const text = teachText.value.trim();
+  if (!text || teachBusy.value || !editingAccountId.value) return;
+  teachMsgs.value.push({ role: 'owner', content: text });
+  teachText.value = '';
+  teachBusy.value = 'teach';
+  scrollTeach();
+  try {
+    const { data } = await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/teach`, teachPayload());
+    teachMsgs.value.push({ role: 'teacher', content: data.reply });
+    teachOps.value = data.preview;
+  } catch (err) {
+    teachMsgs.value.push({ role: 'teacher', content: `⚠️ ${errorText(err, 'Lỗi, anh gửi lại giúp em nhé.')}` });
+  } finally {
+    teachBusy.value = '';
+    scrollTeach();
+  }
+}
+async function tryAsCustomer() {
+  const text = teachText.value.trim();
+  if (!text || teachBusy.value || !editingAccountId.value) return;
+  const payload = teachPayload({ text, gender: tryGender.value || null });
+  teachMsgs.value.push({ role: 'customer', content: text });
+  teachText.value = '';
+  teachBusy.value = 'try';
+  scrollTeach();
+  try {
+    const { data } = await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/teach/try`, payload);
+    const extra = [
+      data.action === 'handoff' ? '[Chuyển cho người thật]' : '',
+      data.images?.length ? `[Gửi ảnh: ${data.images.join(', ')}]` : '',
+    ].filter(Boolean).join(' ');
+    teachMsgs.value.push({ role: 'bot', content: `${data.reply || '(không nói gì)'}${extra ? `\n${extra}` : ''}` });
+  } catch (err) {
+    teachMsgs.value.push({ role: 'bot', content: `⚠️ ${errorText(err, 'Thử không thành công')}` });
+  } finally {
+    teachBusy.value = '';
+    scrollTeach();
+  }
+}
+function resetTryConversation() {
+  // Bỏ các lượt khách/bot thử (giữ lời dạy) để thử lại như cuộc trò chuyện mới.
+  teachMsgs.value = teachMsgs.value.filter((m) => m.role === 'owner' || m.role === 'teacher');
+}
+async function closeTeach(save: boolean) {
+  if (!save) {
+    if (teachOps.value.length && !window.confirm('Đóng mà không lưu các bài học vừa dạy?')) return;
+    teachOpen.value = false;
+    return;
+  }
+  if (!editingAccountId.value) return;
+  if (teachOps.value.length === 0 && !teachMsgs.value.some((m) => m.role === 'owner')) {
+    teachOpen.value = false;
+    return;
+  }
+  teachSaving.value = true;
+  try {
+    const { data } = await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/teach/finish`, teachPayload());
+    lessons.value = data.lessons;
+    learnResult.value = { ok: true, text: `Buổi dạy đã lưu: thêm ${data.added}, sửa ${data.updated}, bỏ ${data.removed} bài học. Bot áp dụng ngay từ tin tiếp theo.` };
+    teachOpen.value = false;
+    await loadProfiles();
+  } catch (err) {
+    toast.error(errorText(err, 'Lưu bài học không thành công'));
+  } finally {
+    teachSaving.value = false;
+  }
+}
+
 const badDialog = ref(false);
 const badLog = ref<LogRow | null>(null);
 const badForm = reactive({ correctedReply: '', note: '' });
@@ -673,8 +851,14 @@ async function learnNow() {
   learning.value = true;
   try {
     const { data } = await api.post(`/ai/auto-reply/profiles/${editingAccountId.value}/learn-now`);
-    if (data.skipped) toast.warning(`Chưa học được: ${data.skipped}`);
-    else toast.success(`Đã học ${data.reviewed} lượt: thêm ${data.added} bài học, bỏ ${data.removed} bài cũ.`);
+    learnResult.value = data.skipped
+      ? {
+          ok: false,
+          text: data.skipped === 'không có lượt nào để học'
+            ? `Đã xem ${data.reviewed} lượt gần đây: chưa có lượt nào bị nhân viên sửa, khách phàn nàn hay bị chấm 👎 nên chưa có gì mới để học. Muốn AI học ngay, bấm "Dạy cho AI" hoặc chấm 👎 ở Nhật ký.`
+            : `Chưa học được: ${data.skipped}.`,
+        }
+      : { ok: true, text: `Đã học ${data.reviewed} lượt: thêm ${data.added} bài học, bỏ ${data.removed} bài cũ.` };
     await Promise.all([loadLearning(editingAccountId.value), loadProfiles(), loadLogs()]);
   } catch (err) {
     toast.error(errorText(err, 'Học không thành công'));
@@ -1109,6 +1293,22 @@ onMounted(loadAll);
 .aar-qbar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; background: rgba(var(--v-theme-on-surface), 0.05); border-radius: 3px; }
 .aar-qbar { width: 100%; border-radius: 3px; background: currentColor; }
 .aar-qlabel { font-size: 10px; color: rgba(var(--v-theme-on-surface), 0.55); margin-top: 2px; }
+.teach-body { display: flex; gap: 16px; height: 68vh; }
+.teach-chat { flex: 3; display: flex; flex-direction: column; min-width: 0; }
+.teach-messages { flex: 1; overflow-y: auto; padding: 8px; background: rgba(var(--v-theme-on-surface), 0.03); border-radius: 8px; }
+.teach-empty { padding: 12px; line-height: 1.6; }
+.teach-msg { max-width: 82%; margin: 6px 0; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; font-size: 14px; }
+.teach-who { font-size: 11px; opacity: 0.65; margin-bottom: 2px; }
+.teach-owner { margin-left: auto; background: rgba(103, 58, 183, 0.12); }
+.teach-teacher { background: rgb(var(--v-theme-surface)); border: 1px solid rgba(103, 58, 183, 0.3); }
+.teach-customer { margin-left: auto; background: rgba(var(--v-theme-primary), 0.1); border: 1px dashed rgba(var(--v-theme-primary), 0.4); }
+.teach-bot { background: rgba(var(--v-theme-success), 0.1); border: 1px dashed rgba(var(--v-theme-success), 0.5); }
+.teach-input { padding-top: 8px; }
+.teach-side { flex: 2; overflow-y: auto; border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); padding-left: 16px; }
+.teach-op { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); font-size: 13px; }
+.teach-op-text { flex: 1; }
+.teach-op-before { text-decoration: line-through; opacity: 0.55; }
+@media (max-width: 800px) { .teach-body { flex-direction: column; height: auto; } .teach-side { border-left: none; padding-left: 0; } }
 .aar-ref { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; border-bottom: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); }
 .aar-ref-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .aar-ref-size { font-size: 11px; color: rgba(var(--v-theme-on-surface), 0.55); white-space: nowrap; }

@@ -69,6 +69,7 @@ function prime(opts: { config?: Partial<typeof CONFIG_ROW>; labels?: unknown[]; 
     { title: 'Bảng size', category: 'size', keywords: ['size'], content: 'Áo có size S, M, L.' },
   ]);
   prismaMock.messageTemplate.findMany.mockResolvedValue([]);
+  prismaMock.aiLesson.findMany.mockResolvedValue([]);
   prismaMock.aiAutoReplyLog.count.mockResolvedValue(0);
   prismaMock.aiAutoReplyLog.create.mockResolvedValue({});
   prismaMock.conversation.update.mockResolvedValue({});

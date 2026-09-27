@@ -123,13 +123,23 @@ export async function evaluateOutcomes(now = new Date(), limit = 200): Promise<n
 
 // ── 2. Bài học ─────────────────────────────────────────────────────────────
 
-export async function activeLessons(zaloAccountId: string): Promise<Array<{ id: string; content: string }>> {
+export async function activeLessons(zaloAccountId: string): Promise<Array<{ id: string; content: string; source: string }>> {
   return prisma.aiLesson.findMany({
     where: { zaloAccountId, active: true },
     orderBy: { updatedAt: 'desc' },
     take: MAX_ACTIVE_LESSONS,
-    select: { id: true, content: true },
+    select: { id: true, content: true, source: true },
   });
+}
+
+/** Bài học do CHỦ SHOP đưa ra (dạy / tự viết / chấm 👎) — ưu tiên cao hơn skill. */
+export const OWNER_LESSON_SOURCES = ['teach', 'manual', 'feedback'];
+
+export function splitLessons(list: Array<{ content: string; source: string }>): { owner: string[]; auto: string[] } {
+  return {
+    owner: list.filter((l) => OWNER_LESSON_SOURCES.includes(l.source)).map((l) => l.content),
+    auto: list.filter((l) => !OWNER_LESSON_SOURCES.includes(l.source)).map((l) => l.content),
+  };
 }
 
 const LESSON_RULES = [
@@ -186,7 +196,7 @@ async function trimLessons(zaloAccountId: string) {
     orderBy: { updatedAt: 'desc' },
     select: { id: true, source: true },
   });
-  const extra = active.slice(MAX_ACTIVE_LESSONS).filter((l) => l.source !== 'manual').map((l) => l.id);
+  const extra = active.slice(MAX_ACTIVE_LESSONS).filter((l) => l.source !== 'manual' && l.source !== 'teach').map((l) => l.id);
   if (extra.length) await prisma.aiLesson.updateMany({ where: { id: { in: extra } }, data: { active: false } });
 }
 
@@ -248,7 +258,7 @@ export async function runDailyLearning(orgId: string, zaloAccountId: string, now
     'Nhận: bài học hiện có + các lượt trả lời gần đây (kèm cách nhân viên thực tế xử lý và nhận xét của chủ shop).',
     'Việc: rút ra bài học MỚI giúp AI trả lời giống nhân viên giỏi hơn; và chỉ ra bài học hiện có nào SAI hoặc bị lượt mới chứng minh là lỗi thời.',
     ...LESSON_RULES,
-    'Tối đa 5 bài học mới, không trùng ý bài hiện có. Không bỏ bài có nguồn "manual" (chủ shop tự viết).',
+    'Tối đa 5 bài học mới, không trùng ý bài hiện có. Không bỏ bài có nguồn "manual" hoặc "teach" (chủ shop tự viết / trực tiếp dạy).',
     'Trả DUY NHẤT JSON: {"add": ["bài học mới"], "remove": ["id bài học hiện có cần bỏ"]}',
   ].join('\n');
   const prompt = [
@@ -275,7 +285,7 @@ export async function runDailyLearning(orgId: string, zaloAccountId: string, now
     .map(sanitizeLesson)
     .filter((l): l is string => !!l && !known.has(fold(l)))
     .slice(0, 5);
-  const removable = new Set(existing.filter((l) => l.source !== 'manual').map((l) => l.id));
+  const removable = new Set(existing.filter((l) => l.source !== 'manual' && l.source !== 'teach').map((l) => l.id));
   const toRemove = (Array.isArray(parsed.remove) ? parsed.remove : [])
     .filter((id): id is string => typeof id === 'string' && removable.has(id));
 

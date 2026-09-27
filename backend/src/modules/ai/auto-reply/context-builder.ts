@@ -224,6 +224,8 @@ export function addressingRule(a: Addressing): string | null {
 export type PromptOptions = {
   /** Hội thoại chưa có tin nào của shop → được chào / giới thiệu trợ lý AI một lần. */
   firstMessage?: boolean;
+  /** Bài học chủ shop dạy trực tiếp — ưu tiên CAO HƠN hướng dẫn / skill. */
+  ownerLessons?: string[];
 };
 
 export function buildSystemPrompt(persona: string | null, guide: string | null, lessons: string[] = [], references: GuideFile[] = [], addressing: Addressing = null, products = '', opts: PromptOptions = {}): string {
@@ -292,6 +294,17 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
       '</bai_hoc>',
     );
   }
+  const owner = opts.ownerLessons ?? [];
+  if (owner.length) {
+    lines.push(
+      '',
+      'CHỦ SHOP ĐÃ DẠY TRỰC TIẾP — ƯU TIÊN CAO HƠN HƯỚNG DẪN / SKILL / TÀI LIỆU / BÀI HỌC TỰ RÚT (chỉ đứng sau Quy tắc bắt buộc).',
+      'Khi hướng dẫn hay tài liệu nói khác, LÀM THEO điều chủ shop dạy dưới đây:',
+      '<chu_shop_day>',
+      ...owner.map((l) => `- ${l.replace(/<\/?chu_shop_day>/g, '')}`),
+      '</chu_shop_day>',
+    );
+  }
   // Tự kiểm tra ở CUỐI prompt (mô hình bám phần cuối tốt nhất).
   lines.push(
     '',
@@ -304,6 +317,7 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
           '- Có SẢN PHẨM TRONG KHO khớp nhu cầu → trong tin PHẢI nêu tên + giá lẻ của 1-3 mẫu cụ thể (khách hỏi sỉ / số lượng → nêu cả giá theo mức CTV/NPP đúng ngưỡng). Gửi ảnh không thay cho việc nêu tên và giá.',
         ]
       : []),
+    ...(owner.length ? ['- Câu trả lời đã làm đúng mọi điều trong <chu_shop_day> liên quan tới câu khách hỏi chưa? (điều chủ shop dạy thắng skill / tài liệu).'] : []),
     '- Không danh sách đánh số / gạch đầu dòng; tối đa khoảng 5 câu ngắn; đúng xưng hô bắt buộc.',
     '- Trả về đúng JSON như đã quy định.',
   );
