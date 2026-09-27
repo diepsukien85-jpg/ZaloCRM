@@ -390,9 +390,17 @@
               </div>
 
               <div class="aar-taggroup-title mt-3 d-flex align-center">
-                Bài học của nick này ({{ lessons.filter((l) => l.active).length }} đang dùng)
+                <span>AI đã học <strong>{{ lessons.filter((l) => l.active).length }}</strong> bài</span>
+                <span v-if="lessons.length" class="aar-hint ml-2" style="margin: 0;">
+                  ({{ lessons.filter((l) => l.active && ['teach', 'manual', 'feedback'].includes(l.source)).length }} do anh dạy · {{ lessons.filter((l) => l.active && l.source === 'daily').length }} tự rút)
+                </span>
+                <v-spacer />
+                <v-btn v-if="lessons.length" size="x-small" variant="text" :append-icon="showLessons ? 'mdi-chevron-up' : 'mdi-chevron-down'" @click="showLessons = !showLessons">
+                  {{ showLessons ? 'Ẩn danh sách' : 'Xem / sửa bài học' }}
+                </v-btn>
               </div>
-              <div v-if="lessons.length === 0" class="aar-hint">Chưa có bài học nào. Bài học sẽ xuất hiện sau khi AI trả lời khách và được chấm.</div>
+              <div v-if="lessons.length === 0" class="aar-hint">Chưa có bài học nào. Bấm "Dạy cho AI" để dạy, hoặc chờ AI tự rút sau khi trả lời khách.</div>
+              <template v-if="showLessons">
               <div v-for="l in lessons" :key="l.id" class="aar-lesson" :class="{ 'aar-lesson-off': !l.active }">
                 <v-chip size="x-small" variant="tonal" :color="l.source === 'manual' ? 'primary' : l.source === 'teach' ? 'deep-purple' : l.source === 'feedback' ? 'warning' : 'info'" class="mr-2">
                   {{ ({ manual: 'tự viết', feedback: 'từ phản hồi', teach: 'đã dạy', daily: 'tự học' } as Record<string, string>)[l.source] || l.source }}
@@ -408,6 +416,7 @@
                 <v-text-field v-model="newLesson" density="compact" hide-details label="Thêm bài học tự viết (vd: Luôn hỏi số lượng trước khi báo giá sỉ)" class="flex-grow-1" @keyup.enter="addLesson" />
                 <v-btn size="small" variant="tonal" @click="addLesson">Thêm</v-btn>
               </div>
+              </template>
             </template>
 
             <!-- Hàng rào -->
@@ -718,6 +727,7 @@ const newLesson = ref('');
 const learning = ref(false);
 const editingProfile = computed(() => profiles.value.find((p) => p.zaloAccountId === editingAccountId.value) ?? null);
 const learnResult = ref<{ ok: boolean; text: string } | null>(null);
+const showLessons = ref(false); // danh sách bài học thu gọn mặc định
 
 // ── Dạy cho AI ──
 type TeachMsg = { role: 'owner' | 'teacher' | 'customer' | 'bot'; content: string };

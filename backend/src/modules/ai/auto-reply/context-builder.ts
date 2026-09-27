@@ -114,7 +114,7 @@ export async function buildAutoReplyContext(input: {
 }
 
 /** Trần ký tự tài liệu tham khảo đưa vào 1 lượt trả lời (ngoài hướng dẫn chính). */
-export const REFERENCE_BUDGET_CHARS = 16000;
+export const REFERENCE_BUDGET_CHARS = 26000;
 const AUTO_REFERENCE_LIMIT = 3;
 
 /** Từ chức năng / xưng hô quá phổ biến trong tin khách — không nói lên chủ đề. */
