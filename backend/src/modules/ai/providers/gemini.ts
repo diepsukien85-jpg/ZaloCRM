@@ -1,4 +1,7 @@
-export async function generateWithGemini(baseUrl: string, apiKey: string, model: string, system: string, prompt: string, maxTokens = 600) {
+/** Ảnh đính kèm cho mô hình nhìn được (base64, không có tiền tố data:). */
+export type InlineImage = { mimeType: string; data: string };
+
+export async function generateWithGemini(baseUrl: string, apiKey: string, model: string, system: string, prompt: string, maxTokens = 600, images: InlineImage[] = []) {
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
@@ -21,7 +24,8 @@ export async function generateWithGemini(baseUrl: string, apiKey: string, model:
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        // Ảnh (nếu có) đi trước lời nhắc để mô hình nhìn ảnh rồi mới đọc câu hỏi.
+        contents: [{ role: 'user', parts: [...images.map((img) => ({ inlineData: { mimeType: img.mimeType, data: img.data } })), { text: prompt }] }],
         generationConfig,
       }),
       signal: controller.signal,

@@ -27,10 +27,11 @@ import { getProfile } from './config-service.js';
 import { activeLessons, splitLessons, startLearningScheduler } from './learning-service.js';
 import { isCatalogEnabled, renderProducts, searchProducts, type CatalogProduct, type ProductQuery } from './catalog-service.js';
 import { notifyHandoff } from './handoff-notify.js';
+import { imageUrlOf, understandCustomerImages } from './image-understanding.js';
 import { sendToThread } from '../../api/public-api-routes.js';
 import { buildAutoReplyContext, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
 import {
-  cleanStyle, enforceHonesty, enforceNoCredentials, localHour, matchesAnyKeyword,
+  cleanStyle, enforceHonesty, enforceNoCredentials, fold, localHour, matchesAnyKeyword,
   normalizeTagName, parseDecision, withinHours,
 } from './guardrails.js';
 
@@ -179,15 +180,76 @@ async function writeLog(t: LogTarget, sourceMessageId: string | null, decision: 
 
 // ── Kiểm duyệt căn cứ (lượt AI thứ 2) ─────────────────────────────────────
 
-async function verifyGrounding(p: { provider: string; apiKey: string; model: string; reply: string; sources: string }): Promise<{ ok: boolean; text: string } | null> {
+const MONEY_RE = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(k|nghìn|ngàn|vnđ|vnd|đồng|đ)(?![\p{L}\p{N}])/giu;
+
+/** Số tiền trong một đoạn (vd "72.000đ", "1.440.000 đ", "79k") → số đồng. Hàm thuần. */
+export function moneyAmounts(text: string): number[] {
+  const out: number[] = [];
+  // Không dùng \\b: "đ" không phải ký tự \\w nên \\b không khớp sau "72.000đ".
+  for (const m of text.matchAll(MONEY_RE)) {
+    const n = Number(m[1].replace(/[.,]/g, ''));
+    if (!Number.isFinite(n)) continue;
+    out.push(/^(k|nghìn|ngàn)$/i.test(m[2]) ? n * 1000 : n);
+  }
+  return out;
+}
+
+/**
+ * Số tiền trong tin có căn cứ không: có trong nguồn, hoặc = giá trong nguồn × số lượng
+ * (1-1000, vd "20 chai thì tổng 1.440.000đ"). Hàm thuần.
+ */
+export function unsupportedAmounts(reply: string, sources: string): number[] {
+  const known = new Set(moneyAmounts(sources));
+  return moneyAmounts(reply).filter((n) => {
+    if (known.has(n)) return false;
+    for (const k of known) if (k > 0 && n % k === 0 && n / k <= 1000) return false;
+    return true;
+  });
+}
+
+/** Câu nhắc chính sách / cam kết — nhóm dễ bịa nhất, luôn cần căn cứ. */
+const POLICY_WORDS = /(bao hanh|doi tra|hoan tien|mien phi|freeship|phi ship|phi giao|giao (trong|ngay|toi|hang)|ship|khuyen mai|giam gia|tang kem|qua tang|cam ket|dam bao|chinh hang|tron doi|het han|con \d+ (cai|chai|hop|goi))/;
+
+/**
+ * Câu bị kiểm duyệt nghi là bịa có THẬT SỰ đáng ngờ không. Báo nhầm (bỏ qua) khi câu
+ * không nhắc chính sách / cam kết và mọi số tiền trong câu đều có trong nguồn
+ * (hoặc là tổng từ giá trong nguồn). Hàm thuần.
+ */
+export function isRealGroundingIssue(sentence: string, sources: string): boolean {
+  if (POLICY_WORDS.test(fold(sentence))) return true;
+  if (unsupportedAmounts(sentence, sources).length) return true;
+  // Không số tiền, không chính sách: chỉ đáng ngờ nếu có con số khác (dung tích, thời gian…) không có trong nguồn.
+  const withoutMoney = sentence.replace(MONEY_RE, ' ');
+  const nums = withoutMoney.match(/\d+(?:[.,]\d+)?/g) ?? [];
+  return nums.some((n) => !sources.includes(n));
+}
+
+/**
+ * Nguồn giá của đúng các món AI chọn gửi ảnh (tin đang tư vấn chính các món đó) —
+ * chặn lấy nhầm giá biến thể khác (vd giá 25ml cho chai 20ml). Hàm thuần.
+ */
+export function focusPriceSource(products: Array<{ id: number; name: string; priceRetail: number | null; priceCtv: number | null; priceNpp: number | null }>, ids: number[]): string | null {
+  const focus = products.filter((p) => ids.includes(p.id));
+  if (!focus.length) return null;
+  return focus.map((p) => `${p.name}: giá lẻ ${p.priceRetail ?? '?'}đ · CTV ${p.priceCtv ?? '?'}đ · NPP ${p.priceNpp ?? '?'}đ`).join('\n');
+}
+
+async function verifyGrounding(p: { provider: string; apiKey: string; model: string; reply: string; sources: string; moneySources?: string | null }): Promise<{ ok: boolean; text: string } | null> {
+  const badMoney = unsupportedAmounts(p.reply, p.moneySources ?? p.sources);
   const system = [
     'Bạn KIỂM DUYỆT một tin nhắn shop sắp gửi cho khách trên Zalo.',
-    'Bạn nhận NGUỒN (kho kịch bản, mẫu tin, hồ sơ khách, lịch sử chat) và TIN SẮP GỬI.',
-    'Việc duy nhất: tìm mọi KHẲNG ĐỊNH SỰ THẬT hoặc CAM KẾT mà NGUỒN không nêu rõ:',
-    'giá, phí ship, khuyến mãi, còn hàng, thời gian giao, chính sách đổi trả, thông số sản phẩm, "sẽ gửi", bất kỳ con số nào.',
-    'KHÔNG tính: lời chào, cảm ơn, câu hỏi lại khách, câu ghi nhận, câu hẹn "em kiểm tra rồi báo lại".',
-    'Nếu có khẳng định không căn cứ: viết lại TOÀN BỘ tin, giữ xưng hô, giữ phần có căn cứ, thay phần không căn cứ bằng câu hẹn kiểm tra và báo lại. Không thêm thông tin mới.',
-    'Trả DUY NHẤT JSON: {"ok": true|false, "rewrite": "tin đã viết lại, rỗng nếu ok"}',
+    'Bạn nhận NGUỒN (sản phẩm trong kho, kho kịch bản, hướng dẫn, mẫu tin, hồ sơ khách, lịch sử chat, tin khách vừa gửi) và TIN SẮP GỬI.',
+    'Việc: liệt kê NGUYÊN VĂN các câu trong tin có KHẲNG ĐỊNH SỰ THẬT hoặc CAM KẾT mà NGUỒN không nêu',
+    '(giá, phí ship, khuyến mãi, còn hàng, thời gian giao, bảo hành / đổi trả, thông số, "sẽ gửi", con số).',
+    'CÓ CĂN CỨ (không liệt kê): tên món, giá lẻ / CTV / NPP, ngưỡng số lượng, còn hàng từ <san_pham_trong_kho>; tổng tiền = giá × số lượng;',
+    'nói món trong ảnh khách gửi ("[Khách gửi ảnh: …]") chính là món trong kho khi loại / thương hiệu / dung tích khớp; "em gửi ảnh anh/chị xem";',
+    'lời chào, giới thiệu trợ lý, cảm ơn, câu hỏi lại, câu ghi nhận, câu hẹn "em kiểm tra rồi báo lại".',
+    badMoney.length
+      ? `Hệ thống đã đối chiếu: số tiền ${badMoney.map((n) => n.toLocaleString('vi-VN') + 'đ').join(', ')} KHÔNG đúng giá của món đang tư vấn → phải sửa.`
+        + (p.moneySources ? ` Giá ĐÚNG của món đang tư vấn: ${p.moneySources.replace(/\n/g, ' | ')} — sửa về đúng giá này (hoặc tổng = giá × số lượng).` : '')
+      : 'Hệ thống đã đối chiếu: mọi số tiền trong tin đều có trong nguồn.',
+    'Nếu có câu không căn cứ: kèm "rewrite" = toàn bộ tin, giữ NGUYÊN VĂN mọi câu khác, chỉ sửa câu sai (sai giá thì thay bằng giá đúng nếu hệ thống đã đưa; không có thì thay bằng câu hẹn kiểm tra và báo lại).',
+    'Trả DUY NHẤT JSON: {"unsupported": ["câu nguyên văn"], "rewrite": "tin đã viết lại, rỗng nếu không có câu nào"}',
   ].join('\n');
   const prompt = ['<nguon>', p.sources, '</nguon>', '', '<tin_sap_gui>', p.reply, '</tin_sap_gui>'].join('\n');
   let raw: string;
@@ -203,8 +265,12 @@ async function verifyGrounding(p: { provider: string; apiKey: string; model: str
   const b = t.lastIndexOf('}');
   if (a === -1 || b <= a) return null;
   try {
-    const parsed = JSON.parse(t.slice(a, b + 1)) as { ok?: unknown; rewrite?: unknown };
-    if (parsed.ok === true) return { ok: true, text: p.reply };
+    const parsed = JSON.parse(t.slice(a, b + 1)) as { unsupported?: unknown; rewrite?: unknown; ok?: unknown };
+    const flagged = (Array.isArray(parsed.unsupported) ? parsed.unsupported : [])
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+    // Code thẩm tra lại: bỏ các câu báo nhầm (chỉ chứa giá / tổng tiền đúng nguồn, không nhắc chính sách).
+    const real = flagged.filter((sentence) => isRealGroundingIssue(sentence, p.sources));
+    if (real.length === 0 && badMoney.length === 0) return { ok: true, text: p.reply };
     const rewrite = typeof parsed.rewrite === 'string' ? parsed.rewrite.trim() : '';
     return rewrite ? { ok: false, text: rewrite } : null;
   } catch {
@@ -300,8 +366,13 @@ export async function evaluateConversation(
   const texts = pending
     .filter((m) => (m.contentType === 'text' || m.contentType === 'rich' || m.contentType === 'link') && m.content?.trim())
     .map((m) => m.content!.trim());
-  if (texts.length === 0) return { decision: 'skipped', reason: 'khách chỉ gửi ảnh/sticker' };
-  const customerText = texts.join('\n');
+  // Ảnh khách gửi (vd ảnh sản phẩm hỏi "có bán không") — AI sẽ nhìn ảnh ở bước sau.
+  const imageUrls = pending
+    .filter((m) => m.contentType === 'image')
+    .map((m) => imageUrlOf(m.content))
+    .filter((u): u is string => !!u);
+  if (texts.length === 0 && imageUrls.length === 0) return { decision: 'skipped', reason: 'khách chỉ gửi sticker / tệp' };
+  let customerText = texts.join('\n');
 
   const convInfo = conv as { id: string; zaloAccountId: string; externalThreadId: string; contactId: string | null };
 
@@ -368,6 +439,17 @@ export async function evaluateConversation(
     return { decision: 'error', reason: 'thiếu khoá AI' };
   }
 
+  // Nhìn ảnh khách gửi → mô tả sản phẩm + truy vấn tra kho.
+  const imageInsight = imageUrls.length
+    ? await understandCustomerImages({ provider: ai.provider, apiKey, model: ai.model }, imageUrls, customerText)
+    : null;
+  if (imageUrls.length) {
+    const note = imageInsight
+      ? `[Khách gửi ${imageUrls.length > 1 ? `${imageUrls.length} ảnh` : 'ảnh'}: ${imageInsight.summary}]`
+      : '[Khách gửi ảnh nhưng hệ thống chưa xem được ảnh — hỏi khách tên / loại món trong ảnh]';
+    customerText = [customerText, note].filter(Boolean).join('\n');
+  }
+
   // Tài liệu tham khảo của skill: file "luôn dùng" + file khớp chủ đề câu khách hỏi.
   const references = pickGuideFiles(cfg.guideFiles ?? [], customerText);
   // Xưng hô theo giới tính Zalo của khách (nữ → chị, nam → anh).
@@ -383,7 +465,11 @@ export async function evaluateConversation(
   // Tra kho thật (bot-noi-bo): AI tách từ khoá sản phẩm → tìm hàng còn tồn + giá theo mức.
   let products: CatalogProduct[] = [];
   if (cfg.useProductCatalog && isCatalogEnabled()) {
-    const queries = await extractProductQueries({ provider: ai.provider, apiKey, model: ai.model }, customerText, ctx.history);
+    const textQueries = texts.length
+      ? await extractProductQueries({ provider: ai.provider, apiKey, model: ai.model }, customerText, ctx.history)
+      : [];
+    // Truy vấn từ ảnh đứng trước (khách hỏi "cái này có bán không" thì ảnh mới nói món gì).
+    const queries = [...(imageInsight?.queries ?? []), ...textQueries].slice(0, 4);
     if (queries.length) {
       products = await searchProducts(queries, 8).catch((err) => {
         logger.warn(`[ai-auto-reply] tra kho lỗi: ${err?.message ?? err}`);
@@ -411,8 +497,14 @@ export async function evaluateConversation(
   if (decision.action === 'handoff') return handoff(decision.reason, decision.reply, decision.urgent);
 
   let text = applyGuards(decision.reply, customerText);
+  let groundingRewrote = false;
   if (cfg.verifyGrounding) {
-    const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text, sources: renderSources(ctx)
+    const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text,
+      moneySources: focusPriceSource(products, decision.productIds),
+      sources: renderSources(ctx)
+      // Tin khách đang chờ (kèm mô tả ảnh khách gửi) — thiếu phần này kiểm duyệt tưởng
+      // "mẫu này bên em có bán" là bịa và viết lại thành "để em kiểm tra".
+      + `\n\n<tin_khach_vua_gui>\n${customerText}\n</tin_khach_vua_gui>`
       + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
       + (references.length ? `\n\n${renderReferences(references)}` : '')
       + (productsBlock ? `\n\n${productsBlock}` : '')
@@ -421,7 +513,11 @@ export async function evaluateConversation(
       await log(lastPending.id, 'error', 'kiểm duyệt căn cứ lỗi, không gửi cho an toàn', text);
       return { decision: 'error', reason: 'kiểm duyệt lỗi' };
     }
-    if (!checked.ok) text = applyGuards(checked.text, customerText);
+    if (!checked.ok) {
+      logger.info(`[ai-auto-reply] kiểm duyệt sửa tin conv=${conversationId}: "${text.slice(0, 120)}" → "${checked.text.slice(0, 120)}"`);
+      text = applyGuards(checked.text, customerText);
+      groundingRewrote = true;
+    }
   }
   if (!text.trim()) {
     await log(lastPending.id, 'error', 'tin sau lớp chặn bị rỗng');
@@ -447,7 +543,9 @@ export async function evaluateConversation(
   }
 
   const latency = Date.now() - started;
-  const productNote = products.length ? ` · tra kho ${products.length} món` : '';
+  const productNote = (imageUrls.length ? ` · xem ${imageUrls.length} ảnh${imageInsight ? '' : ' (không đọc được)'}` : '')
+    + (products.length ? ` · tra kho ${products.length} món` : '')
+    + (groundingRewrote ? ' · kiểm duyệt đã sửa câu' : '');
   if (cfg.mode === 'dry_run' || test) {
     await log(lastPending.id, 'dry_run', `thẻ "${trigger}"${productNote} · ${decision.reason}`, logText, latency, customerText);
     return { decision: 'dry_run', reason: decision.reason, content: logText };

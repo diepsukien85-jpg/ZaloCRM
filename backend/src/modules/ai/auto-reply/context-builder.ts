@@ -263,6 +263,8 @@ export function buildSystemPrompt(persona: string | null, guide: string | null, 
       '- Chỉ nói về sản phẩm có trong danh sách; không bịa món, không bịa giá, không hứa còn hàng số lượng lớn nếu tồn ít. Món "GẦN ĐÚNG" thì nói rõ kho chưa có đúng món khách hỏi rồi mới gợi ý món liên quan.',
       '- Muốn khách xem ảnh: điền id vào "productIds" (tối đa 3); hệ thống tự gửi ảnh sau tin nhắn, trong tin chỉ cần nói "gửi ảnh để anh/chị xem".',
       '- Danh sách rỗng hoặc không có món phù hợp: nói sẽ kiểm tra lại và báo khách, hỏi thêm nhu cầu; KHÔNG bịa.',
+      '- Khách GỬI ẢNH (dòng "[Khách gửi ảnh: …]"): tìm trong danh sách món khớp ảnh (cùng loại, thương hiệu, dung tích). Có món khớp → xác nhận bên em có bán + nêu tên + giá lẻ NGAY trong tin (không nói "để em kiểm tra giá"), rồi hỏi khách lấy mấy cái. Chỉ có món tương tự → nói rõ "mẫu tương tự" kèm giá. Không có gì liên quan → nói thật hiện chưa có và hỏi thêm nhu cầu.',
+      '- Kho có NHIỀU BIẾN THỂ cùng loại (dung tích, kích thước, màu): chọn ĐÚNG biến thể khớp ảnh / lời khách (vd ảnh ghi 20ml → món 20ml) và dùng giá, id của đúng biến thể đó; không lấy giá của biến thể khác.',
       products,
     );
   }

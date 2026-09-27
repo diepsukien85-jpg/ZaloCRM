@@ -3,7 +3,7 @@ import { config } from '../../config/index.js';
 import { logger } from '../../shared/utils/logger.js';
 import { getProviderConfig, getAvailableProviders } from './provider-registry.js';
 import { generateWithAnthropic } from './providers/anthropic.js';
-import { generateWithGemini } from './providers/gemini.js';
+import { generateWithGemini, type InlineImage } from './providers/gemini.js';
 import { generateWithOpenaiCompat } from './providers/openai-compat.js';
 import { generateWithClaudeCli } from './providers/claude-cli.js';
 import { buildReplyDraftPrompt } from './prompts/reply-draft.js';
@@ -124,6 +124,21 @@ export async function generateText(provider: string, apiKey: string, model: stri
   if (provider === 'kimi') return generateWithOpenaiCompat(`${baseUrl}/v1/chat/completions`, apiKey, model, system, prompt, maxTokens);
 
   throw new Error(`Unsupported AI provider: ${provider}`);
+}
+
+/** Nhà cung cấp AI nhìn được ảnh qua generateWithImages. */
+export function providerSupportsImages(provider: string): boolean {
+  return provider === 'gemini';
+}
+
+/**
+ * Gọi AI kèm ảnh (vision). Hiện hỗ trợ Gemini (mặc định của hệ thống).
+ * Nhà cung cấp khác → ném lỗi để caller bỏ qua phần ảnh.
+ */
+export async function generateWithImages(provider: string, apiKey: string, model: string, system: string, prompt: string, images: InlineImage[], maxTokens?: number) {
+  if (!providerSupportsImages(provider)) throw new Error(`Provider ${provider} chưa hỗ trợ đọc ảnh`);
+  const providerDef = getProviderConfig(provider);
+  return generateWithGemini(providerDef?.baseUrl || '', apiKey, model, system, prompt, maxTokens, images);
 }
 
 async function saveSuggestion(input: { orgId: string; conversationId: string; messageId?: string; type: AiTaskType; content: string; confidence: number }) {
