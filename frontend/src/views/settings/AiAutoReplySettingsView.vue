@@ -197,7 +197,7 @@
             <template v-else>
               <div class="aar-taggroup-title">Thẻ phân loại Zalo của nick <strong>{{ accountName(editingAccountId) }}</strong></div>
               <div v-if="zaloTags.length === 0" class="aar-hint">
-                Nick này chưa có thẻ phân loại nào. Tạo thẻ trên app Zalo (vd "Bot AI"), khoảng 1 phút sau mở lại.
+                Nick này chưa có thẻ phân loại nào. Tạo thẻ trên app Zalo (vd "Bot AI"), rồi mở lại sau ít phút (danh sách thẻ trong CRM cập nhật 15 phút/lần).
               </div>
               <v-chip-group v-else v-model="form.triggerTags" multiple column filter>
                 <v-chip v-for="l in zaloTags" :key="l.value" :value="l.value" :color="l.color" variant="outlined" size="small">

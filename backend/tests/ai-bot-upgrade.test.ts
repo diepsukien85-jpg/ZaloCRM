@@ -204,3 +204,19 @@ describe('chuyển người + Telegram', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('thẻ Zalo "sống" (không chờ đồng bộ 15 phút)', () => {
+  it('DB chưa có thẻ nhưng Zalo đã gắn "Bot AI" → AI vẫn xét; cache 60s mỗi nick', async () => {
+    const { liveZaloLabels, _clearLiveLabelCache } = await import('../src/modules/ai/auto-reply/auto-reply-service.js');
+    _clearLiveLabelCache();
+    prime({ gender: 'male', text: 'Mình có phải là kho sỉ không ạ' });
+    prismaMock.friend.findUnique.mockResolvedValue({ crmTagsPerNick: [], zaloLabels: [] }); // DB chưa đồng bộ
+    exec.mockImplementation(async (_o: unknown, fn: any) => fn({ getLabels: async () => ({ labelData: [{ text: 'Bot AI', conversations: ['u9'] }, { text: 'Note', conversations: ['x'] }] }) }));
+    aiServiceMock.generateText.mockResolvedValue('{"action":"reply","reply":"Dạ đúng rồi anh ạ","reason":"x"}');
+    sendMessage.mockResolvedValue({});
+    const r = await evaluateConversation('org-1', 'conv-1', { now: NOW });
+    expect(r.decision).toBe('sent');
+    expect(await liveZaloLabels('za-1', 'u9')).toEqual(['Bot AI']);
+    expect(exec.mock.calls.filter((c: any) => c[0].operation === 'getLabels(ai)').length).toBe(1); // cache
+  });
+});

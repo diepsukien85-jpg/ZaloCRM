@@ -71,6 +71,55 @@ export async function getConversationTags(conv: {
   return [...out];
 }
 
+// ── Thẻ phân loại Zalo "sống" (không chờ đồng bộ 15 phút) ──────────────────
+
+const LIVE_LABEL_TTL_MS = 60_000;
+const liveLabelCache = new Map<string, { at: number; labels: Array<{ text: string; conversations: string[] }> }>();
+
+/**
+ * Thẻ phân loại Zalo của 1 hội thoại, đọc thẳng từ Zalo (getLabels) — vì đồng bộ
+ * thẻ về CRM chạy 15 phút/lần, chủ shop vừa gắn thẻ "Bot AI" mà khách nhắn ngay
+ * thì DB chưa có. Cache 60 giây mỗi nick (tối đa 1 lần gọi Zalo / phút / nick).
+ * Lỗi / nick mất kết nối → [].
+ */
+export async function liveZaloLabels(zaloAccountId: string, threadId: string | null): Promise<string[]> {
+  if (!threadId || zaloPool.getInstance(zaloAccountId)?.status !== 'connected') return [];
+  let hit = liveLabelCache.get(zaloAccountId);
+  if (!hit || Date.now() - hit.at > LIVE_LABEL_TTL_MS) {
+    try {
+      const res = await zaloOps.exec(
+        { accountId: zaloAccountId, category: 'query', operation: 'getLabels(ai)' },
+        (api: any) => api.getLabels(),
+      ) as { labelData?: Array<{ text?: string; conversations?: unknown[] }> } | null;
+      hit = {
+        at: Date.now(),
+        labels: (res?.labelData ?? []).map((l) => ({
+          text: String(l.text ?? ''),
+          conversations: Array.isArray(l.conversations) ? l.conversations.map(String) : [],
+        })),
+      };
+      liveLabelCache.set(zaloAccountId, hit);
+    } catch (err: any) {
+      logger.debug(`[ai-auto-reply] getLabels lỗi nick=${zaloAccountId}: ${err?.message ?? err}`);
+      return [];
+    }
+  }
+  return hit.labels.filter((l) => l.text && l.conversations.includes(threadId)).map((l) => l.text);
+}
+
+/** Thẻ của hội thoại từ DB; nếu chưa khớp thẻ kích hoạt thì hỏi thêm Zalo (thẻ vừa gắn). */
+async function conversationTagsWithLive(conv: { zaloAccountId: string; externalThreadId: string | null; contactId: string | null }, triggerTags: string[]): Promise<string[]> {
+  const tags = await getConversationTags(conv);
+  if (matchTriggerTag(tags, triggerTags)) return tags;
+  const live = await liveZaloLabels(conv.zaloAccountId, conv.externalThreadId);
+  return live.length ? [...new Set([...tags, ...live])] : tags;
+}
+
+/** Chỉ cho test. */
+export function _clearLiveLabelCache(): void {
+  liveLabelCache.clear();
+}
+
 /** Thẻ kích hoạt đầu tiên khớp (so theo tên đã chuẩn hoá), null nếu không khớp. */
 export function matchTriggerTag(tags: string[], triggerTags: string[]): string | null {
   if (!tags.length || !triggerTags.length) return null;
@@ -199,7 +248,7 @@ export async function evaluateConversation(
     ? async (..._args: unknown[]) => {}
     : (...args: [string | null, Decision, string, (string | null)?, number?, string?]) => writeLog(target, ...args);
 
-  const tags = await getConversationTags(conv);
+  const tags = await conversationTagsWithLive(conv, cfg.triggerTags);
   const trigger = matchTriggerTag(tags, cfg.triggerTags);
   if (!trigger) return { decision: 'skipped', reason: 'không có thẻ kích hoạt' };
 
@@ -523,7 +572,7 @@ async function quickFilter(orgId: string, conversationId: string, zaloAccountId:
   accountId = conv.zaloAccountId;
   const cfg = await getProfile(orgId, accountId);
   if (!cfg?.enabled || cfg.triggerTags.length === 0) return null;
-  if (!matchTriggerTag(await getConversationTags(conv), cfg.triggerTags)) return null;
+  if (!matchTriggerTag(await conversationTagsWithLive(conv, cfg.triggerTags), cfg.triggerTags)) return null;
   return cfg.debounceSeconds * 1000;
 }
 

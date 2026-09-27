@@ -24,7 +24,7 @@ const emit = vi.fn();
 vi.mock('../src/shared/database/prisma-client.js', () => ({ prisma: prismaMock }));
 vi.mock('../src/modules/ai/ai-service.js', () => aiServiceMock);
 vi.mock('../src/shared/zalo-operations.js', () => ({ zaloOps: { sendMessage } }));
-vi.mock('../src/modules/zalo/zalo-pool.js', () => ({ zaloPool: { getIO: () => ({ to: () => ({ emit }) }) } }));
+vi.mock('../src/modules/zalo/zalo-pool.js', () => ({ zaloPool: { getIO: () => ({ to: () => ({ emit }) }), getInstance: () => undefined } }));
 vi.mock('../src/modules/contacts/contact-aggregate.js', () => ({
   applyContactAggregateFromMessage: vi.fn(), applyFriendAggregate: vi.fn(),
 }));
