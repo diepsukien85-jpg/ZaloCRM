@@ -51,11 +51,14 @@ export type HandoffInfo = {
   dryRun?: boolean;
   /** customer (mặc định) | staff = nhân viên cần chủ xử lý | identity = người nhắn chưa rõ / người thân. */
   kind?: 'customer' | 'staff' | 'identity';
+  /** Đã dời hội thoại vào thẻ Zalo "Chờ người thật". */
+  held?: boolean;
 };
 
 /** Hàm thuần: soạn tin Telegram theo mẫu của skill. */
 export function formatHandoff(h: HandoffInfo, appUrl = config.appUrl): string {
   const link = `${appUrl.replace(/\/$/, '')}/chat/${h.conversationId}`;
+  const heldLine = h.held ? '📌 Đã chuyển vào thẻ Zalo "Chờ người thật" — trả lời khách xong, thẻ cũ tự trả lại.' : null;
   if (h.kind === 'staff' || h.kind === 'identity') {
     const staff = h.kind === 'staff';
     return [
@@ -68,7 +71,8 @@ export function formatHandoff(h: HandoffInfo, appUrl = config.appUrl): string {
       `Tin nhắn: ${esc(h.customerText.slice(0, 600))}`,
       `Bot đã trả lời: ${h.botReply ? esc(h.botReply.slice(0, 400)) : '(chưa trả lời)'}`,
       `Link hội thoại: ${link}`,
-    ].join('\n');
+      heldLine,
+    ].filter(Boolean).join('\n');
   }
   return [
     `🔔 <b>CẦN ANH MẪN XỬ LÝ — ${h.urgent ? '🚨 KHẨN' : 'BÌNH THƯỜNG'}</b>${h.dryRun ? ' <i>(AI đang chạy thử)</i>' : ''}`,
@@ -78,7 +82,8 @@ export function formatHandoff(h: HandoffInfo, appUrl = config.appUrl): string {
     `Khách nhắn: ${esc(h.customerText.slice(0, 600))}`,
     `Bot đã trả lời: ${h.botReply ? esc(h.botReply.slice(0, 400)) : '(chưa trả lời khách)'}`,
     `Link hội thoại: ${link}`,
-  ].join('\n');
+    heldLine,
+  ].filter(Boolean).join('\n');
 }
 
 /**

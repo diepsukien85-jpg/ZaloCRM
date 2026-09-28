@@ -240,6 +240,8 @@
                 cho người chưa có thẻ. <strong>Thẻ Nhân Viên anh tự gắn</strong> — AI không tự xếp ai vào nhân viên (thấy giống nhân viên thì báo Telegram để anh gắn).
                 AI trả lời Khách Hàng (tư vấn) và Nhân Viên (giọng anh nhắn nhân viên), <strong>không trả lời Người Thân</strong>.
                 Chưa rõ là ai → chờ vài phút, anh không trả lời thì AI hỏi "khách hàng hay người thân". Người đã có thẻ khác: AI giữ nguyên thẻ, làm theo nhóm anh xếp bên dưới.
+                <br>Tin AI <strong>chuyển cho người thật</strong> (khách khiếu nại, cần anh quyết, chưa rõ là ai…) được dời vào thẻ <strong>Chờ người thật</strong> —
+                anh mở thẻ này trên Zalo để xử lý; anh / nhân viên trả lời xong thì thẻ cũ tự trả lại và AI làm việc tiếp.
               </p>
               <template v-if="form.classifyContacts">
                 <div class="d-flex flex-wrap mb-2" style="gap: 6px;">
@@ -251,7 +253,8 @@
                 </div>
                 <v-alert v-if="nickLabels.missing.length" type="warning" variant="tonal" density="compact" class="mb-2">
                   Nick này chưa có thẻ <strong>{{ nickLabels.missing.join(', ') }}</strong>. Mở app Zalo của nick → Phân loại → tạo đúng tên thẻ đó,
-                  rồi bấm "Tải lại thẻ". Chưa đủ thẻ Khách Hàng + Người Thân thì AI chưa tự phân loại (người đã có thẻ vẫn được trả lời theo thẻ).
+                  rồi bấm "Tải lại thẻ". Mỗi nick cần đủ 4 thẻ để AI chạy ổn định: thiếu Khách Hàng / Người Thân thì AI chưa tự phân loại;
+                  thiếu "Chờ người thật" thì tin AI chuyển cho người thật chỉ báo qua Telegram, không vào thẻ.
                 </v-alert>
 
                 <div v-if="otherLabels.length" class="aar-taggroup-title mt-2">Thẻ khác của nick — xếp vào nhóm nào?</div>
@@ -849,8 +852,8 @@ function labelCountText(l: { count: number; groups?: number }) {
 const loadingNickLabels = ref(false);
 const classes = ref<ClassRow[]>([]);
 const showClasses = ref(false);
-const CORE_NAMES: Record<string, string> = { customer: 'Khách Hàng', staff: 'Nhân Viên', family: 'Người Thân' };
-const coreLabelStatus = computed(() => (['customer', 'staff', 'family'] as const).map((g) => {
+const CORE_NAMES: Record<string, string> = { customer: 'Khách Hàng', staff: 'Nhân Viên', family: 'Người Thân', waiting: 'Chờ người thật' };
+const coreLabelStatus = computed(() => (['customer', 'staff', 'family', 'waiting'] as const).map((g) => {
   const l = nickLabels.value.labels.find((x) => x.core === g);
   return { name: l?.text || CORE_NAMES[g], ok: !!l, count: l?.count ?? 0 };
 }));

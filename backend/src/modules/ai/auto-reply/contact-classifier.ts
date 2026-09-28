@@ -22,27 +22,39 @@ import { fold, normalizeTagName } from './guardrails.js';
 export type ContactGroup = 'customer' | 'staff' | 'family' | 'other' | 'unknown';
 type AiRef = { provider: string; apiKey: string; model: string };
 
-/** Tên chuẩn hoá của 3 thẻ chính. */
-export const CORE_LABELS: Record<'customer' | 'staff' | 'family', string> = {
+/**
+ * Tên chuẩn hoá của 4 thẻ chính. "Chờ người thật" (waiting): AI chuyển cho người thật xử lý → gắn thẻ này
+ * (anh vào thẻ này trên Zalo để xử lý), trả lại thẻ cũ khi người thật trả lời — xem handoff-hold.ts.
+ */
+export const CORE_LABELS: Record<'customer' | 'staff' | 'family' | 'waiting', string> = {
   customer: 'khach hang',
   staff: 'nhan vien',
   family: 'nguoi than',
+  waiting: 'cho nguoi that',
 };
-export const GROUP_LABEL_TEXT: Record<'customer' | 'staff' | 'family', string> = {
+export const GROUP_LABEL_TEXT: Record<'customer' | 'staff' | 'family' | 'waiting', string> = {
   customer: 'Khách Hàng',
   staff: 'Nhân Viên',
   family: 'Người Thân',
+  waiting: 'Chờ người thật',
 };
+export type CoreGroup = keyof typeof CORE_LABELS;
 /** AI tự tin từ mức này trở lên mới tự gắn thẻ (dưới mức này thì hỏi). */
 export const MIN_CONFIDENCE = 0.95;
 
 // ── Hàm thuần ───────────────────────────────────────────────────────────────
 
-/** Thẻ này có phải 1 trong 3 thẻ chính không. */
-export function coreGroupOfLabel(name: string): 'customer' | 'staff' | 'family' | null {
+/** Thẻ này có phải 1 trong 4 thẻ chính không. */
+export function coreGroupOfLabel(name: string): CoreGroup | null {
   const n = normalizeTagName(name);
-  for (const [g, key] of Object.entries(CORE_LABELS)) if (n === key) return g as 'customer' | 'staff' | 'family';
+  for (const [g, key] of Object.entries(CORE_LABELS)) if (n === key) return g as CoreGroup;
   return null;
+}
+
+/** Cả 4 thẻ chính còn thiếu trên nick (hiển thị cho anh — nick nên có đủ 4 thẻ để AI chạy ổn định). */
+export function missingAllCoreLabels(labelNames: string[]): string[] {
+  const have = new Set(labelNames.map(coreGroupOfLabel).filter(Boolean));
+  return (Object.keys(CORE_LABELS) as CoreGroup[]).filter((g) => !have.has(g)).map((g) => GROUP_LABEL_TEXT[g]);
 }
 
 /**
@@ -63,10 +75,10 @@ export function groupOfTags(
   zaloLabels: string[],
   crmTags: string[],
   cfg: Pick<AutoReplyProfile, 'labelGroups' | 'triggerTags'>,
-): { group: LabelGroup; tag: string } | null {
+): { group: LabelGroup | 'waiting'; tag: string } | null {
   const mapped = new Map(Object.entries(cfg.labelGroups ?? {}).map(([k, g]) => [normalizeTagName(k), g]));
   const triggers = new Set((cfg.triggerTags ?? []).map(normalizeTagName));
-  const found: Array<{ group: LabelGroup; tag: string }> = [];
+  const found: Array<{ group: LabelGroup | 'waiting'; tag: string }> = [];
   const judge = (tag: string, zalo: boolean) => {
     const n = normalizeTagName(tag);
     if (!n) return;
@@ -78,7 +90,8 @@ export function groupOfTags(
   };
   zaloLabels.forEach((t) => judge(t, true));
   crmTags.forEach((t) => judge(t, false));
-  for (const g of ['staff', 'family', 'customer', 'ignore'] as LabelGroup[]) {
+  // "Chờ người thật" đứng trên hết: người thật đang xử lý → AI im.
+  for (const g of ['waiting', 'staff', 'family', 'customer', 'ignore'] as Array<LabelGroup | 'waiting'>) {
     const hit = found.find((f) => f.group === g);
     if (hit) return hit;
   }
@@ -234,6 +247,11 @@ export async function nickZaloLabels(zaloAccountId: string): Promise<NickLabel[]
 export async function threadZaloLabels(zaloAccountId: string, threadId: string): Promise<string[] | null> {
   const labels = await nickZaloLabels(zaloAccountId);
   return labels ? labels.filter((l) => l.text && l.conversations.includes(threadId)).map((l) => l.text) : null;
+}
+
+/** Bỏ cache thẻ của 1 nick (sau khi đổi thẻ). */
+export function _dropNickLabelCache(zaloAccountId: string): void {
+  labelCache.delete(zaloAccountId);
 }
 
 /** Chỉ cho test. */

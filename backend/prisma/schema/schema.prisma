@@ -2492,3 +2492,21 @@ model AiContactClass {
   @@index([zaloAccountId, updatedAt])
   @@map("ai_contact_classes")
 }
+
+/// AI chuyển người thật: hội thoại đang mang thẻ "Chờ người thật" (nhớ thẻ cũ để trả lại khi người thật trả lời).
+model AiHandoffHold {
+  id             String    @id @default(uuid())
+  orgId          String    @map("org_id")
+  zaloAccountId  String    @map("zalo_account_id")
+  conversationId String    @map("conversation_id")
+  threadId       String    @map("thread_id")
+  prevLabel      String?   @map("prev_label")
+  reason         String?
+  heldAt         DateTime  @default(now()) @map("held_at")
+  releasedAt     DateTime? @map("released_at")
+  releaseNote    String?   @map("release_note")
+
+  @@index([releasedAt])
+  @@index([conversationId])
+  @@map("ai_handoff_holds")
+}

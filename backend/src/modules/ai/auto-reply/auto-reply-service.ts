@@ -33,6 +33,7 @@ import { buildAutoReplyContext, buildStaffSystemPrompt, buildSystemPrompt, pickG
 import { _clearLabelCache, groupOfTags, nickZaloLabels, staffStyleExamples, threadZaloLabels } from './contact-classifier.js';
 import { noteAiEvent, startAiMonitor } from './ai-monitor.js';
 import { resolveAudience, startClassifySweeper } from './classify-flow.js';
+import { holdForHuman, startHoldReleaser } from './handoff-hold.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, fold, localHour, matchesAnyKeyword,
   normalizeTagName, parseDecision, withinHours,
@@ -345,11 +346,13 @@ export async function evaluateConversation(
   const tags = classify ? await getConversationTags(conv) : await conversationTagsWithLive(conv, cfg.triggerTags);
   const trigger = matchTriggerTag(tags, cfg.triggerTags);
   if (!classify && !trigger) return { decision: 'skipped', reason: 'không có thẻ kích hoạt' };
-  if (classify && !test) {
-    // Người thân / thẻ anh để "không trả lời" → dừng ngay, không ghi nhật ký, không hẹn xét lại.
+  if (!test) {
+    // Thẻ "Chờ người thật" (AI đã chuyển, người thật đang xử lý) → AI im, ở MỌI nick.
+    // Nick tự phân loại: người thân / thẻ anh để "không trả lời" → cũng dừng ngay. Không ghi nhật ký.
     const early = await threadZaloLabels(conv.zaloAccountId, conv.externalThreadId);
-    const g = early ? groupOfTags(early, tags, cfg) : null;
-    if (g && (g.group === 'family' || g.group === 'ignore')) return { decision: 'skipped', reason: `thẻ "${g.tag}" — AI không trả lời` };
+    const g = early ? groupOfTags(early, classify ? tags : [], cfg) : null;
+    if (g?.group === 'waiting') return { decision: 'skipped', reason: `thẻ "${g.tag}" — đang chờ người thật xử lý` };
+    if (classify && g && (g.group === 'family' || g.group === 'ignore')) return { decision: 'skipped', reason: `thẻ "${g.tag}" — AI không trả lời` };
   }
 
   const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { timezone: true } });
@@ -439,11 +442,15 @@ export async function evaluateConversation(
         await sendReply(orgId, convInfo, d.say, { markReplied: false }).catch((err) => logger.warn(`[ai-auto-reply] gửi câu ngắn lỗi: ${err?.message ?? err}`));
       }
       if (d.log && !test) await writeLog({ ...target, audience: 'classify' }, lastPending.id, 'skipped', d.reason, d.say && live ? d.say : null, Date.now() - started, customerText);
+      // Cần anh xem (chưa rõ là ai / giống nhân viên chưa gắn thẻ) → thẻ "Chờ người thật". Người thân (có câu cảm ơn) thì không.
+      const held = d.notify && !d.say && live
+        ? await holdForHuman({ orgId, zaloAccountId: conv.zaloAccountId, conversationId, threadId: convInfo.externalThreadId, reason: d.notify }).catch(() => false)
+        : false;
       if (d.notify && !test && cfg.notifyHandoff) {
         const acc = await prisma.zaloAccount.findUnique({ where: { id: conv.zaloAccountId }, select: { displayName: true } });
         void notifyHandoff({
           conversationId, nickName: acc?.displayName || 'Zalo', customerName: contactRow?.crmName || contactRow?.fullName || 'Người nhắn',
-          urgent: false, reason: `${d.notify} · ${d.reason}`, customerText, botReply: d.say && live ? d.say : null, kind: 'identity',
+          urgent: false, reason: `${d.notify} · ${d.reason}`, customerText, botReply: d.say && live ? d.say : null, kind: 'identity', held,
         }, { chatId: cfg.handoffChatId, pauseMinutes: cfg.handoffPauseMinutes });
       }
       return { decision: 'skipped', reason: d.reason };
@@ -490,11 +497,14 @@ export async function evaluateConversation(
         logger.warn(`[ai-auto-reply] gửi câu báo chuyển người lỗi: ${err?.message ?? err}`);
       }
     }
-    // Báo Telegram TRƯỚC rồi ghi nhật ký kèm kết quả báo (trước đây không biết đã báo hay bị chặn trùng).
+    // Gắn thẻ "Chờ người thật" (hộp việc trên Zalo, không sót như Telegram) — chỉ khi AI đang tự gửi.
+    const held = live ? await holdForHuman({ orgId, zaloAccountId: conv.zaloAccountId, conversationId, threadId: convInfo.externalThreadId, reason }).catch(() => false) : false;
+    // Báo Telegram rồi ghi nhật ký kèm kết quả báo (trước đây không biết đã báo hay bị chặn trùng).
     let notified: NotifyStatus | null = null;
     if (!test && cfg.notifyHandoff) {
       notified = await notifyHandoffStatus({
         ...(await handoffWho()),
+        held,
         urgent,
         reason,
         customerText,
@@ -504,7 +514,7 @@ export async function evaluateConversation(
         // Mỗi việc nhân viên xin là 1 việc riêng → luôn báo (khách thì chống báo trùng theo khoảng nghỉ).
       }, { chatId: cfg.handoffChatId, pauseMinutes: staff ? 0 : cfg.handoffPauseMinutes });
     }
-    await log(lastPending.id, 'handoff', `${reason || 'AI chuyển người'}${notifyNote(notified)}`, say, Date.now() - started, customerText);
+    await log(lastPending.id, 'handoff', `${reason || 'AI chuyển người'}${held ? ' · 📌 thẻ Chờ người thật' : ''}${notifyNote(notified)}`, say, Date.now() - started, customerText);
     return { decision: 'handoff', reason, content: say ?? undefined };
   };
 
@@ -857,6 +867,8 @@ export function startAiAutoReply(): void {
     schedule(event.orgId, payload.conversationId, delayMs);
   });
   startLearningScheduler();
+  // Người thật trả lời hội thoại đang "Chờ người thật" → trả lại thẻ cũ.
+  startHoldReleaser();
   // Hỏi danh tính người nhắn chưa rõ khi đã chờ đủ lâu (tự phân loại).
   startClassifySweeper({
     send: (orgId, conv, text) => sendReply(orgId, conv, text, { markReplied: false }),

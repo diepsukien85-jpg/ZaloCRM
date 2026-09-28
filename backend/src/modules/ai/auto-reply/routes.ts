@@ -36,7 +36,7 @@ import {
 } from './config-service.js';
 import { evaluateConversation } from './auto-reply-service.js';
 import { CloneError, cloneProfileFrom } from './clone-service.js';
-import { coreGroupOfLabel, missingCoreLabels, nickZaloLabels } from './contact-classifier.js';
+import { coreGroupOfLabel, missingAllCoreLabels, nickZaloLabels } from './contact-classifier.js';
 import { isCatalogEnabled } from './catalog-service.js';
 import { defaultHandoffChatId, isTelegramConfigured, sendTelegram } from './handoff-notify.js';
 import { evaluateOutcomes, learnFromFeedback, qualityByDay, runDailyLearning, sanitizeLesson } from './learning-service.js';
@@ -164,7 +164,8 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
         .map((l) => ({ text: l.text, conversations: Array.isArray(l.conversations) ? (l.conversations as unknown[]).map(String) : [] }));
     return {
       live: !!live,
-      missing: missingCoreLabels(labels.map((l) => l.text)),
+      // Nick nên có đủ 4 thẻ: Khách Hàng, Nhân Viên, Người Thân, Chờ người thật.
+      missing: missingAllCoreLabels(labels.map((l) => l.text)),
       // count = người (chat riêng, AI xử lý); groups = nhóm Zalo (id "g…", AI không trả lời trong nhóm).
       labels: labels.filter((l) => l.text).map((l) => {
         const groups = l.conversations.filter((t) => t.startsWith('g')).length;

@@ -80,6 +80,7 @@ export async function resolveAudience(p: {
   // 1. Đã có thẻ → theo thẻ.
   const byTag = groupOfTags(p.zaloLabels ?? [], p.crmTags, cfg);
   const row = await prisma.aiContactClass.findUnique({ where: { conversationId: conv.id } });
+  if (byTag?.group === 'waiting') return { kind: 'stop', reason: `đang chờ người thật xử lý (thẻ "${byTag.tag}")` };
   if (byTag) {
     if (row && row.state !== 'classified' && !test) {
       await prisma.aiContactClass.update({
