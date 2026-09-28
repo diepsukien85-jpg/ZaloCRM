@@ -26,7 +26,7 @@ import { parseOffsetMinutes, orgDayRange } from '../daily-brief-service.js';
 import { getProfile } from './config-service.js';
 import { activeLessons, splitLessons, startLearningScheduler } from './learning-service.js';
 import { isCatalogEnabled, renderProducts, searchProducts, type CatalogProduct, type ProductQuery } from './catalog-service.js';
-import { notifyHandoff } from './handoff-notify.js';
+import { notifyHandoff, notifyHandoffStatus, type NotifyStatus } from './handoff-notify.js';
 import { imageUrlOf, understandCustomerImages } from './image-understanding.js';
 import { sendToThread } from '../../api/public-api-routes.js';
 import { buildAutoReplyContext, buildStaffSystemPrompt, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
@@ -462,6 +462,23 @@ export async function evaluateConversation(
    * để hội thoại vẫn nằm ở Chưa rep cho nhân viên thấy), (2) ghi nhật ký,
    * (3) báo Telegram chủ shop theo mẫu của skill.
    */
+  const handoffWho = async () => {
+    const [contact, acc] = await Promise.all([
+      conv.contactId
+        ? prisma.contact.findUnique({ where: { id: conv.contactId }, select: { fullName: true, crmName: true, phone: true } })
+        : null,
+      prisma.zaloAccount.findUnique({ where: { id: conv.zaloAccountId }, select: { displayName: true } }),
+    ]);
+    return {
+      conversationId,
+      nickName: acc?.displayName || 'Zalo',
+      customerName: contact?.crmName || contact?.fullName || 'Khách',
+      customerPhone: contact?.phone,
+    };
+  };
+  const notifyNote = (st: NotifyStatus | null) => st === 'sent' ? ' · 📨 đã báo Telegram'
+    : st === 'throttled' ? ' · (vừa báo Telegram, chưa báo lại)' : st === 'error' ? ' · ⚠️ báo Telegram LỖI' : st === 'off' ? ' · (chưa cấu hình Telegram)' : '';
+
   const handoff = async (reason: string, reply: string | null, urgent: boolean): Promise<EvaluateResult> => {
     let say = reply?.trim() ? applyGuards(reply, customerText) : null;
     if (say && staff && !say.startsWith('🤖')) say = `🤖 ${say}`;
@@ -473,19 +490,11 @@ export async function evaluateConversation(
         logger.warn(`[ai-auto-reply] gửi câu báo chuyển người lỗi: ${err?.message ?? err}`);
       }
     }
-    await log(lastPending.id, 'handoff', reason || 'AI chuyển người', say, Date.now() - started, customerText);
+    // Báo Telegram TRƯỚC rồi ghi nhật ký kèm kết quả báo (trước đây không biết đã báo hay bị chặn trùng).
+    let notified: NotifyStatus | null = null;
     if (!test && cfg.notifyHandoff) {
-      const [contact, acc] = await Promise.all([
-        conv.contactId
-          ? prisma.contact.findUnique({ where: { id: conv.contactId }, select: { fullName: true, crmName: true, phone: true } })
-          : null,
-        prisma.zaloAccount.findUnique({ where: { id: conv.zaloAccountId }, select: { displayName: true } }),
-      ]);
-      void notifyHandoff({
-        conversationId,
-        nickName: acc?.displayName || 'Zalo',
-        customerName: contact?.crmName || contact?.fullName || 'Khách',
-        customerPhone: contact?.phone,
+      notified = await notifyHandoffStatus({
+        ...(await handoffWho()),
         urgent,
         reason,
         customerText,
@@ -495,8 +504,31 @@ export async function evaluateConversation(
         // Mỗi việc nhân viên xin là 1 việc riêng → luôn báo (khách thì chống báo trùng theo khoảng nghỉ).
       }, { chatId: cfg.handoffChatId, pauseMinutes: staff ? 0 : cfg.handoffPauseMinutes });
     }
+    await log(lastPending.id, 'handoff', `${reason || 'AI chuyển người'}${notifyNote(notified)}`, say, Date.now() - started, customerText);
     return { decision: 'handoff', reason, content: say ?? undefined };
   };
+
+  // Đã chuyển anh xử lý mà chưa ai trả lời → AI IM (trước đây lặp "Anh Mẫn sẽ kiểm tra lại ngay…" mỗi tin khách),
+  // chỉ báo Telegram "khách nhắn thêm" (tối đa 10 phút / lần) để anh biết khách đang giục.
+  if (!test) {
+    const lastHandoff = await prisma.aiAutoReplyLog.findFirst({
+      where: { conversationId, decision: 'handoff', createdAt: { gte: new Date(now.getTime() - Math.max(cfg.handoffPauseMinutes, 30) * 60_000) } },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    if (lastHandoff && (!lastHuman || lastHuman.sentAt < lastHandoff.createdAt)) {
+      let st: NotifyStatus | null = null;
+      if (cfg.notifyHandoff) {
+        st = await notifyHandoffStatus({
+          ...(await handoffWho()), urgent: false, reason: 'Khách NHẮN THÊM trong lúc chờ anh xử lý (AI không trả lời lặp lại)',
+          customerText, botReply: null, dryRun: cfg.mode === 'dry_run', kind: staff ? 'staff' : 'customer',
+        }, { chatId: cfg.handoffChatId, pauseMinutes: 10, key: `${conversationId}:nhan-them` });
+      }
+      const at = new Date(lastHandoff.createdAt.getTime() + parseOffsetMinutes(org?.timezone) * 60_000).toISOString().slice(11, 16);
+      await log(lastPending.id, 'skipped', `đang chờ anh xử lý (AI đã chuyển lúc ${at})${notifyNote(st)}`, null, undefined, customerText);
+      return { decision: 'skipped', reason: 'đang chờ người xử lý' };
+    }
+  }
 
   const blocked = staff ? null : matchesAnyKeyword(customerText, cfg.blockedKeywords);
   if (blocked) return handoff(`KHẨN · khách nhắc tới "${blocked}"`, null, true);

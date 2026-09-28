@@ -85,21 +85,34 @@ export function formatHandoff(h: HandoffInfo, appUrl = config.appUrl): string {
  * Gửi báo chuyển người. Trả true nếu đã gửi, false nếu bỏ qua (chưa cấu hình /
  * vừa báo hội thoại này gần đây). Không ném lỗi — lỗi ghi log.
  */
-export async function notifyHandoff(h: HandoffInfo, opts: { chatId?: string | null; pauseMinutes?: number }): Promise<boolean> {
+export type NotifyStatus = 'sent' | 'throttled' | 'off' | 'error';
+
+/**
+ * Gửi báo chuyển người, trả trạng thái (để ghi vào nhật ký AI). Không ném lỗi.
+ * `key` = khoá chống báo trùng (mặc định theo hội thoại; tin "khách nhắn thêm" dùng khoá riêng).
+ */
+export async function notifyHandoffStatus(h: HandoffInfo, opts: { chatId?: string | null; pauseMinutes?: number; key?: string }): Promise<NotifyStatus> {
   const chatId = opts.chatId?.trim() || defaultHandoffChatId();
-  if (!isTelegramConfigured() || !chatId) return false;
+  if (!isTelegramConfigured() || !chatId) return 'off';
+  const key = opts.key ?? h.conversationId;
   const now = Date.now();
-  const last = lastSent.get(h.conversationId) ?? 0;
-  if (!h.urgent && now - last < (opts.pauseMinutes ?? 60) * 60_000) return false;
+  const last = lastSent.get(key) ?? 0;
+  if (!h.urgent && now - last < (opts.pauseMinutes ?? 60) * 60_000) return 'throttled';
   try {
     await sendTelegram(chatId, formatHandoff(h));
-    lastSent.set(h.conversationId, now);
+    lastSent.set(key, now);
     if (lastSent.size > 5000) for (const [k, t] of lastSent) if (now - t > 86_400_000) lastSent.delete(k);
-    return true;
+    logger.info(`[ai-handoff] đã báo Telegram (${h.kind ?? 'customer'}${h.urgent ? ', KHẨN' : ''}) conv=${h.conversationId}: ${h.reason.slice(0, 100)}`);
+    return 'sent';
   } catch (err: any) {
     logger.warn(`[ai-handoff] gửi Telegram lỗi: ${err?.message ?? err}`);
-    return false;
+    return 'error';
   }
+}
+
+/** Như notifyHandoffStatus, trả true nếu đã gửi. */
+export async function notifyHandoff(h: HandoffInfo, opts: { chatId?: string | null; pauseMinutes?: number; key?: string }): Promise<boolean> {
+  return (await notifyHandoffStatus(h, opts)) === 'sent';
 }
 
 /** Chỉ cho test. */

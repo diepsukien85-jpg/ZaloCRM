@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const prismaMock = {
   aiAutoReplyProfile: { findUnique: vi.fn() },
-  aiAutoReplyLog: { create: vi.fn(), count: vi.fn() },
+  aiAutoReplyLog: { create: vi.fn(), count: vi.fn(), findFirst: vi.fn(async () => null) },
   aiPlaybookEntry: { findMany: vi.fn() },
   aiLesson: { findMany: vi.fn() },
   messageTemplate: { findMany: vi.fn() },
@@ -192,6 +192,32 @@ describe('chuyển người + Telegram', () => {
     expect(JSON.parse((fetchMock.mock.calls[0] as any)[1].body).text).toContain('khách muốn gặp Mẫn');
     vi.unstubAllGlobals();
   });
+  it('nhật ký chuyển người ghi rõ đã báo Telegram', async () => {
+    prime({ text: 'Cho gặp anh Mẫn' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    aiServiceMock.generateText.mockResolvedValue('{"action":"handoff","reply":"Dạ anh Mẫn sẽ nhắn lại ạ","reason":"THƯỜNG · khách muốn gặp Mẫn","urgent":false}');
+    sendMessage.mockResolvedValue({});
+    await evaluateConversation('org-1', 'conv-1', { now: NOW });
+    const logged = prismaMock.aiAutoReplyLog.create.mock.calls.map((c: any) => c[0].data).find((d: any) => d.decision === 'handoff');
+    expect(logged.reason).toContain('📨 đã báo Telegram');
+    vi.unstubAllGlobals();
+  });
+
+  it('đã chuyển anh xử lý, chưa ai trả lời, khách nhắn thêm → AI IM + báo Telegram "khách nhắn thêm"', async () => {
+    prime({ text: 'cho em xin lại file nha' });
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    prismaMock.aiAutoReplyLog.findFirst.mockResolvedValue({ createdAt: new Date(NOW.getTime() - 5 * 60_000) });
+    const r = await evaluateConversation('org-1', 'conv-1', { now: NOW });
+    expect(r).toMatchObject({ decision: 'skipped', reason: 'đang chờ người xử lý' });
+    expect(aiServiceMock.generateText).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(JSON.parse((fetchMock.mock.calls[0] as any)[1].body).text).toContain('NHẮN THÊM');
+    const logged = prismaMock.aiAutoReplyLog.create.mock.calls.map((c: any) => c[0].data).find((d: any) => d.decision === 'skipped');
+    expect(logged.reason).toContain('đang chờ anh xử lý');
+    vi.unstubAllGlobals();
+  });
+
   it('từ khoá nhạy cảm → chuyển KHẨN + Telegram, không gọi AI', async () => {
     prime({ text: 'tôi muốn khiếu nại' });
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));

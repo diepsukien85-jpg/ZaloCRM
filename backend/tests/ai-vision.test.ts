@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const prismaMock = {
   aiAutoReplyProfile: { findUnique: vi.fn() },
-  aiAutoReplyLog: { create: vi.fn(), count: vi.fn() },
+  aiAutoReplyLog: { create: vi.fn(), count: vi.fn(), findFirst: vi.fn(async () => null) },
   aiPlaybookEntry: { findMany: vi.fn() },
   aiLesson: { findMany: vi.fn() },
   messageTemplate: { findMany: vi.fn() },
