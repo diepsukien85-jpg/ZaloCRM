@@ -30,7 +30,8 @@ import { notifyHandoff } from './handoff-notify.js';
 import { imageUrlOf, understandCustomerImages } from './image-understanding.js';
 import { sendToThread } from '../../api/public-api-routes.js';
 import { buildAutoReplyContext, buildStaffSystemPrompt, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
-import { _clearLabelCache, nickZaloLabels, staffStyleExamples, threadZaloLabels } from './contact-classifier.js';
+import { _clearLabelCache, groupOfTags, nickZaloLabels, staffStyleExamples, threadZaloLabels } from './contact-classifier.js';
+import { noteAiEvent, startAiMonitor } from './ai-monitor.js';
 import { resolveAudience, startClassifySweeper } from './classify-flow.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, fold, localHour, matchesAnyKeyword,
@@ -344,6 +345,12 @@ export async function evaluateConversation(
   const tags = classify ? await getConversationTags(conv) : await conversationTagsWithLive(conv, cfg.triggerTags);
   const trigger = matchTriggerTag(tags, cfg.triggerTags);
   if (!classify && !trigger) return { decision: 'skipped', reason: 'không có thẻ kích hoạt' };
+  if (classify && !test) {
+    // Người thân / thẻ anh để "không trả lời" → dừng ngay, không ghi nhật ký, không hẹn xét lại.
+    const early = await threadZaloLabels(conv.zaloAccountId, conv.externalThreadId);
+    const g = early ? groupOfTags(early, tags, cfg) : null;
+    if (g && (g.group === 'family' || g.group === 'ignore')) return { decision: 'skipped', reason: `thẻ "${g.tag}" — AI không trả lời` };
+  }
 
   const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { timezone: true } });
   const offset = parseOffsetMinutes(org?.timezone);
@@ -389,6 +396,9 @@ export async function evaluateConversation(
   if (!test && lastHuman && cfg.skipIfStaffRepliedWithinMin > 0
     && now.getTime() - lastHuman.sentAt.getTime() < cfg.skipIfStaffRepliedWithinMin * 60_000) {
     await log(lastPending.id, 'skipped', 'nhân viên vừa trả lời');
+    // Hết thời gian nhường mà anh / nhân viên không nhắn tiếp → AI quay lại xét (không bỏ rơi khách).
+    const retryMs = lastHuman.sentAt.getTime() + cfg.skipIfStaffRepliedWithinMin * 60_000 + 15_000 - now.getTime();
+    schedule(orgId, conversationId, Math.max(15_000, retryMs));
     return { decision: 'skipped', reason: 'nhân viên vừa trả lời' };
   }
 
@@ -809,6 +819,7 @@ export function startAiAutoReply(): void {
   automationEventBus.onType(['message_received'], async (event) => {
     const payload = event.payload as { conversationId?: string; zaloAccountId?: string } | undefined;
     if (!payload?.conversationId) return;
+    if (payload.zaloAccountId) noteAiEvent(payload.zaloAccountId); // canh gác: AI vẫn nhận được tin của nick này
     const delayMs = await quickFilter(event.orgId, payload.conversationId, payload.zaloAccountId);
     if (delayMs === null) return;
     schedule(event.orgId, payload.conversationId, delayMs);
@@ -821,6 +832,8 @@ export function startAiAutoReply(): void {
     threadLabels: (accountId, threadId) => threadZaloLabels(accountId, threadId),
     log: (t, decision, reason, content) => writeLog({ ...t, audience: 'classify' }, null, decision, reason, content ?? null),
   });
+  // Tiểu Mỹ canh gác: báo Telegram khi nick mất kết nối / AI lỗi / không nhận tin / tin chờ lâu + báo cáo cuối ngày.
+  startAiMonitor();
   logger.info('[ai-auto-reply] listener đã bật — trả lời hội thoại 1-1 có thẻ kích hoạt / tự phân loại người nhắn');
 }
 
