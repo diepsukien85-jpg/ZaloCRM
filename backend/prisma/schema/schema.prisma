@@ -2365,6 +2365,14 @@ model AiAutoReplyProfile {
   lastLearnedAt               DateTime? @map("last_learned_at")
   verifyGrounding             Boolean  @default(true) @map("verify_grounding")
   // "Học theo nick khác": đã chép hướng dẫn + bài học từ nick mẫu nào, lúc nào (chép xong là của riêng nick này).
+  // Tự phân loại người nhắn 1-1 (thẻ Zalo "Khách Hàng" / "Nhân Viên" / "Người Thân"): AI trả lời khách + nhân viên,
+  // bỏ qua người thân; chưa rõ thì chờ askDelayMinutes rồi hỏi. labelGroups: tên thẻ khác → customer|staff|family|ignore.
+  classifyContacts            Boolean  @default(false) @map("classify_contacts")
+  labelGroups                 Json     @default("{}") @map("label_groups")
+  ownerTitle                  String?  @map("owner_title") // cách gọi chủ nick, vd "anh Mẫn"
+  askDelayMinutes             Int      @default(5) @map("ask_delay_minutes")
+  askTemplate                 String?  @map("ask_template") @db.Text
+  staffGuide                  String?  @map("staff_guide") @db.Text // cách trả lời nhân viên
   clonedFromAccountId         String?  @map("cloned_from_account_id")
   clonedAt                    DateTime? @map("cloned_at")
   createdAt                   DateTime @default(now()) @map("created_at")
@@ -2420,6 +2428,7 @@ model AiAutoReplyLog {
   feedbackAt       DateTime? @map("feedback_at")
   createdAt       DateTime @default(now()) @map("created_at")
 
+  audience       String   @default("customer") // customer | staff | classify
   @@index([orgId, createdAt])
   @@index([conversationId, createdAt])
   @@index([zaloAccountId, createdAt])
@@ -2458,4 +2467,27 @@ model IgnoredGroup {
 
   @@unique([orgId, groupThreadId])
   @@map("ignored_groups")
+}
+
+/// AI phân loại người nhắn 1-1 của 1 hội thoại (Khách Hàng / Nhân Viên / Người Thân / khác).
+model AiContactClass {
+  id             String    @id @default(uuid())
+  orgId          String    @map("org_id")
+  zaloAccountId  String    @map("zalo_account_id")
+  conversationId String    @unique @map("conversation_id")
+  group          String    @default("unknown") // customer | staff | family | other | unknown
+  state          String    @default("classified") // classified | asking | asked | unresolved | owner_cleared
+  source         String? // label | ai | answer
+  confidence     Float?
+  reason         String?
+  labelApplied   Boolean   @default(false) @map("label_applied")
+  askDueAt       DateTime? @map("ask_due_at")
+  askedAt        DateTime? @map("asked_at")
+  answeredAt     DateTime? @map("answered_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([state, askDueAt])
+  @@index([zaloAccountId, updatedAt])
+  @@map("ai_contact_classes")
 }

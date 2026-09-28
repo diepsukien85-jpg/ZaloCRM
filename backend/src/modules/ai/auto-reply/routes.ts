@@ -5,6 +5,8 @@
  *   GET    /api/v1/ai/auto-reply/profiles/:accountId — cấu hình 1 nick (mặc định nếu chưa có)
  *   PUT    /api/v1/ai/auto-reply/profiles/:accountId — lưu cấu hình 1 nick (admin)
  *   DELETE /api/v1/ai/auto-reply/profiles/:accountId — xoá cấu hình 1 nick (admin)
+ *   GET    /api/v1/ai/auto-reply/profiles/:accountId/labels — thẻ Zalo của nick (3 thẻ chính + thẻ khác để xếp nhóm)
+ *   GET    /api/v1/ai/auto-reply/profiles/:accountId/classes — người nhắn AI đã phân loại gần đây
  *   POST   /api/v1/ai/auto-reply/profiles/:accountId/clone-from — học theo nick khác: chép hướng dẫn + bài học (admin)
  *   GET    /api/v1/ai/auto-reply/tags?accountIds=  — thẻ Zalo của nick đã chọn + Tag CRM (kèm số khách)
  *   GET    /api/v1/ai/auto-reply/playbook          — kho kịch bản (dùng chung + riêng từng nick)
@@ -34,6 +36,7 @@ import {
 } from './config-service.js';
 import { evaluateConversation } from './auto-reply-service.js';
 import { CloneError, cloneProfileFrom } from './clone-service.js';
+import { coreGroupOfLabel, missingCoreLabels, nickZaloLabels } from './contact-classifier.js';
 import { isCatalogEnabled } from './catalog-service.js';
 import { defaultHandoffChatId, isTelegramConfigured, sendTelegram } from './handoff-notify.js';
 import { evaluateOutcomes, learnFromFeedback, qualityByDay, runDailyLearning, sanitizeLesson } from './learning-service.js';
@@ -148,6 +151,42 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
       logger.error('[ai-auto-reply] save profile error:', err);
       return reply.status(500).send({ error: 'Không lưu được cấu hình' });
     }
+  });
+
+  // Thẻ Zalo của nick: 3 thẻ chính (Khách Hàng / Nhân Viên / Người Thân) + thẻ khác để anh xếp nhóm.
+  app.get('/api/v1/ai/auto-reply/profiles/:accountId/labels', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    if (!(await orgAccount(orgId, accountId))) return reply.status(404).send({ error: 'Không tìm thấy nick' });
+    const live = await nickZaloLabels(accountId);
+    const labels = live
+      ?? (await prisma.zaloLabel.findMany({ where: { zaloAccountId: accountId }, orderBy: { offset: 'asc' }, select: { text: true, conversations: true } }))
+        .map((l) => ({ text: l.text, conversations: Array.isArray(l.conversations) ? (l.conversations as unknown[]).map(String) : [] }));
+    return {
+      live: !!live,
+      missing: missingCoreLabels(labels.map((l) => l.text)),
+      labels: labels.filter((l) => l.text).map((l) => ({ text: l.text, count: l.conversations.length, core: coreGroupOfLabel(l.text) })),
+    };
+  });
+
+  // Người nhắn AI đã phân loại / đang chờ hỏi gần đây.
+  app.get('/api/v1/ai/auto-reply/profiles/:accountId/classes', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { accountId } = request.params as { accountId: string };
+    const orgId = request.user!.orgId;
+    if (!(await orgAccount(orgId, accountId))) return reply.status(404).send({ error: 'Không tìm thấy nick' });
+    const rows = await prisma.aiContactClass.findMany({ where: { orgId, zaloAccountId: accountId }, orderBy: { updatedAt: 'desc' }, take: 50 });
+    const convs = await prisma.conversation.findMany({
+      where: { id: { in: rows.map((r) => r.conversationId) } },
+      select: { id: true, contact: { select: { fullName: true, crmName: true } } },
+    });
+    const nameOf = new Map(convs.map((c) => [c.id, c.contact?.crmName || c.contact?.fullName || null]));
+    return {
+      classes: rows.map((r) => ({
+        id: r.id, conversationId: r.conversationId, name: nameOf.get(r.conversationId) ?? null, group: r.group, state: r.state,
+        source: r.source, confidence: r.confidence, reason: r.reason, labelApplied: r.labelApplied,
+        askDueAt: r.askDueAt, askedAt: r.askedAt, updatedAt: r.updatedAt,
+      })),
+    };
   });
 
   // Học theo nick khác: chép hướng dẫn / skill + bài học + kịch bản riêng của nick mẫu sang nick này.

@@ -94,6 +94,7 @@ export async function evaluateOutcomes(now = new Date(), limit = 200): Promise<n
   const logs = await prisma.aiAutoReplyLog.findMany({
     where: {
       decision: { in: ['sent', 'dry_run'] },
+      audience: { not: 'classify' }, // câu hỏi danh tính không phải câu tư vấn
       outcome: null,
       createdAt: { lt: new Date(now.getTime() - OUTCOME_WINDOW_MS), gt: new Date(now.getTime() - 3 * 86_400_000) },
     },
@@ -221,7 +222,8 @@ export async function runDailyLearning(orgId: string, zaloAccountId: string, now
     ? new Date(Math.max(new Date(profile.lastLearnedAt).getTime(), now.getTime() - 2 * 86_400_000))
     : new Date(now.getTime() - 2 * 86_400_000);
   const logs = await prisma.aiAutoReplyLog.findMany({
-    where: { zaloAccountId, decision: { in: ['sent', 'dry_run', 'handoff'] }, createdAt: { gt: since } },
+    // Chỉ học từ lượt trả lời KHÁCH (bài học dùng cho tư vấn khách; nhân viên có hướng dẫn riêng).
+    where: { zaloAccountId, audience: 'customer', decision: { in: ['sent', 'dry_run', 'handoff'] }, createdAt: { gt: since } },
     orderBy: { createdAt: 'desc' },
     take: 300,
     select: {
@@ -322,7 +324,7 @@ export async function qualityByDay(orgId: string, zaloAccountId: string, days = 
   const { start: todayStart } = orgDayRange(now, org?.timezone);
   const from = new Date(todayStart.getTime() - (days - 1) * 86_400_000);
   const logs = await prisma.aiAutoReplyLog.findMany({
-    where: { zaloAccountId, createdAt: { gte: from }, decision: { in: ['sent', 'handoff'] } },
+    where: { zaloAccountId, audience: 'customer', createdAt: { gte: from }, decision: { in: ['sent', 'handoff'] } },
     select: { decision: true, outcome: true, feedback: true, createdAt: true },
   });
   const offset = parseOffsetMinutes(org?.timezone) * 60_000;

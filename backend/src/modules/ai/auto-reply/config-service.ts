@@ -23,6 +23,11 @@ export type GuideFileMode = 'always' | 'auto' | 'off';
 export type GuideFile = { path: string; content: string; mode: GuideFileMode };
 
 export type AutoReplyMode = 'auto' | 'dry_run';
+/** Nhóm người nhắn: khách → AI tư vấn; nhân viên → AI trả lời kiểu nhắn nhân viên; người thân / bỏ qua → AI im. */
+export type LabelGroup = 'customer' | 'staff' | 'family' | 'ignore';
+export const LABEL_GROUPS: LabelGroup[] = ['customer', 'staff', 'family', 'ignore'];
+export const ASK_TEMPLATE_MAX = 600;
+export const STAFF_GUIDE_MAX = 8000;
 
 /** Cấu hình AI tự trả lời của MỘT nick (mỗi nick một bản riêng). */
 export type AutoReplyProfile = {
@@ -62,6 +67,18 @@ export type AutoReplyProfile = {
   /** "Học theo nick khác": nick mẫu đã chép hướng dẫn + bài học (null = tự cấu hình). */
   clonedFromAccountId: string | null;
   clonedAt: string | null;
+  /** Tự phân loại người nhắn 1-1 theo 3 thẻ Zalo "Khách Hàng" / "Nhân Viên" / "Người Thân". */
+  classifyContacts: boolean;
+  /** Thẻ Zalo khác → nhóm (thẻ không có ở đây = bỏ qua, AI không trả lời). Khoá là tên thẻ. */
+  labelGroups: Record<string, LabelGroup>;
+  /** Cách gọi chủ nick trong câu hỏi danh tính, vd "anh Mẫn". */
+  ownerTitle: string | null;
+  /** Chưa rõ người nhắn là ai: chờ bấy nhiêu phút (chủ nick không trả lời) rồi AI mới hỏi. */
+  askDelayMinutes: number;
+  /** Câu hỏi danh tính, có thể dùng {ban} (anh/chị theo giới tính), {chu} (cách gọi chủ nick), {toi} (AI tự xưng). */
+  askTemplate: string | null;
+  /** Cách AI trả lời nhân viên (thêm vào tin mẫu chủ nick từng nhắn nhân viên). */
+  staffGuide: string | null;
 };
 export type ProfileInput = Partial<Omit<AutoReplyProfile, 'zaloAccountId' | 'lastLearnedAt' | 'clonedFromAccountId' | 'clonedAt'>>;
 
@@ -80,6 +97,16 @@ export function normalizeGuideFiles(v: unknown): GuideFile[] {
       mode: (['always', 'auto', 'off'].includes(f.mode as string) ? f.mode : 'auto') as GuideFileMode,
     }))
     .filter((f) => f.path && f.content);
+}
+
+export function normalizeLabelGroups(v: unknown): Record<string, LabelGroup> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const out: Record<string, LabelGroup> = {};
+  for (const [k, g] of Object.entries(v as Record<string, unknown>)) {
+    const name = String(k).trim();
+    if (name && LABEL_GROUPS.includes(g as LabelGroup)) out[name] = g as LabelGroup;
+  }
+  return out;
 }
 
 function strArr(v: unknown): string[] {
@@ -117,6 +144,12 @@ function normalize(row: Row): AutoReplyProfile {
     verifyGrounding: row.verifyGrounding,
     clonedFromAccountId: row.clonedFromAccountId,
     clonedAt: row.clonedAt ? row.clonedAt.toISOString() : null,
+    classifyContacts: row.classifyContacts,
+    labelGroups: normalizeLabelGroups(row.labelGroups),
+    ownerTitle: row.ownerTitle,
+    askDelayMinutes: row.askDelayMinutes,
+    askTemplate: row.askTemplate,
+    staffGuide: row.staffGuide,
   };
 }
 
@@ -129,6 +162,7 @@ export function defaultProfile(zaloAccountId: string): AutoReplyProfile {
     addressByGender: true, selfPronoun: 'em', learningEnabled: true, lastLearnedAt: null,
     useProductCatalog: true, sendProductImages: true, notifyHandoff: true, handoffChatId: null, handoffPauseMinutes: 60,
     clonedFromAccountId: null, clonedAt: null,
+    classifyContacts: false, labelGroups: {}, ownerTitle: null, askDelayMinutes: 5, askTemplate: null, staffGuide: null,
   };
 }
 
@@ -189,6 +223,17 @@ export function validateProfileInput(input: ProfileInput): string | null {
   }
   if (input.handoffChatId != null && (typeof input.handoffChatId !== 'string' || !/^-?\d{3,20}$/.test(input.handoffChatId.trim()) && input.handoffChatId.trim() !== '')) return 'Telegram chat id phải là số';
   if (input.handoffPauseMinutes !== undefined && !int(input.handoffPauseMinutes, 0, 1440)) return 'Thời gian không báo lại phải từ 0 đến 1440 phút';
+  if (input.classifyContacts !== undefined && typeof input.classifyContacts !== 'boolean') return 'classifyContacts phải là true/false';
+  if (input.labelGroups !== undefined) {
+    if (!input.labelGroups || typeof input.labelGroups !== 'object' || Array.isArray(input.labelGroups)) return 'Xếp nhóm thẻ không hợp lệ';
+    const entries = Object.entries(input.labelGroups);
+    if (entries.length > 200) return 'Quá nhiều thẻ';
+    if (entries.some(([k, g]) => !k.trim() || k.length > 100 || !LABEL_GROUPS.includes(g))) return 'Xếp nhóm thẻ không hợp lệ';
+  }
+  if (input.ownerTitle != null && (typeof input.ownerTitle !== 'string' || input.ownerTitle.length > 60)) return 'Cách gọi chủ nick tối đa 60 ký tự';
+  if (input.askDelayMinutes !== undefined && !int(input.askDelayMinutes, 0, 720)) return 'Thời gian chờ trước khi hỏi phải từ 0 đến 720 phút';
+  if (input.askTemplate != null && (typeof input.askTemplate !== 'string' || input.askTemplate.length > ASK_TEMPLATE_MAX)) return `Câu hỏi danh tính tối đa ${ASK_TEMPLATE_MAX} ký tự`;
+  if (input.staffGuide != null && (typeof input.staffGuide !== 'string' || input.staffGuide.length > STAFF_GUIDE_MAX)) return `Hướng dẫn trả lời nhân viên tối đa ${STAFF_GUIDE_MAX.toLocaleString('vi-VN')} ký tự`;
   if (input.selfPronoun !== undefined && (typeof input.selfPronoun !== 'string' || !input.selfPronoun.trim() || input.selfPronoun.length > 30)) return 'Tự xưng phải có 1-30 ký tự';
   return null;
 }
@@ -218,6 +263,12 @@ export async function saveProfile(orgId: string, zaloAccountId: string, input: P
     notifyHandoff: input.notifyHandoff,
     handoffChatId: input.handoffChatId === undefined ? undefined : (input.handoffChatId?.trim() || null),
     handoffPauseMinutes: input.handoffPauseMinutes,
+    classifyContacts: input.classifyContacts,
+    labelGroups: input.labelGroups === undefined ? undefined : normalizeLabelGroups(input.labelGroups),
+    ownerTitle: input.ownerTitle === undefined ? undefined : (input.ownerTitle?.trim() || null),
+    askDelayMinutes: input.askDelayMinutes,
+    askTemplate: input.askTemplate === undefined ? undefined : (input.askTemplate?.trim() || null),
+    staffGuide: input.staffGuide === undefined ? undefined : (input.staffGuide?.trim() || null),
   };
   const row = await prisma.aiAutoReplyProfile.upsert({
     where: { zaloAccountId },

@@ -33,7 +33,8 @@
         </div>
         <div class="aar-card-row">
           <span class="aar-card-label">Thẻ:</span>
-          <span v-if="!p.triggerTags.length" class="text-warning">chưa chọn thẻ</span>
+          <v-chip v-if="p.classifyContacts" size="x-small" color="teal" variant="tonal" class="mr-1" prepend-icon="mdi-account-switch-outline">Tự phân loại KH / NV / Người Thân</v-chip>
+          <span v-if="!p.triggerTags.length && !p.classifyContacts" class="text-warning">chưa chọn thẻ</span>
           <v-chip v-for="t in p.triggerTags" :key="t" size="x-small" class="mr-1" variant="tonal">{{ cleanTag(t) }}</v-chip>
         </div>
         <div v-if="p.clonedFromName" class="aar-card-row">
@@ -226,8 +227,91 @@
               </v-alert>
             </v-sheet>
 
+            <!-- Tự phân loại người nhắn -->
+            <v-sheet class="aar-classify mb-4" rounded border>
+              <div class="d-flex align-center flex-wrap" style="gap: 8px;">
+                <div class="aar-step" style="margin: 0;">Tự phân loại người nhắn</div>
+                <v-spacer />
+                <v-switch v-model="form.classifyContacts" color="teal" inset hide-details density="compact"
+                  :label="form.classifyContacts ? 'Đang bật' : 'Đang tắt'" />
+              </div>
+              <p class="aar-hint">
+                AI xét <strong>mọi tin nhắn cá nhân</strong> (không xét nhóm) để xếp người nhắn vào 3 thẻ Zalo
+                <strong>Khách Hàng</strong> / <strong>Nhân Viên</strong> / <strong>Người Thân</strong>.
+                AI trả lời Khách Hàng (tư vấn) và Nhân Viên (giọng anh nhắn nhân viên), <strong>không trả lời Người Thân</strong>.
+                Chưa rõ là ai → chờ vài phút, anh không trả lời thì AI hỏi. Người đã có thẻ khác: AI giữ nguyên thẻ, làm theo nhóm anh xếp bên dưới.
+              </p>
+              <template v-if="form.classifyContacts">
+                <div class="d-flex flex-wrap mb-2" style="gap: 6px;">
+                  <v-chip v-for="c in coreLabelStatus" :key="c.name" size="small" :color="c.ok ? 'success' : 'error'" variant="tonal"
+                    :prepend-icon="c.ok ? 'mdi-check-circle' : 'mdi-alert-circle'">
+                    {{ c.name }}<span v-if="c.ok" class="ml-1">· {{ c.count }} người</span><span v-else class="ml-1">· chưa có</span>
+                  </v-chip>
+                  <v-btn size="x-small" variant="text" prepend-icon="mdi-refresh" :loading="loadingNickLabels" @click="loadNickLabels(editingAccountId!)">Tải lại thẻ</v-btn>
+                </div>
+                <v-alert v-if="nickLabels.missing.length" type="warning" variant="tonal" density="compact" class="mb-2">
+                  Nick này chưa có thẻ <strong>{{ nickLabels.missing.join(', ') }}</strong>. Mở app Zalo của nick → Phân loại → tạo đúng tên thẻ đó,
+                  rồi bấm "Tải lại thẻ". Chưa đủ 3 thẻ thì AI chưa tự phân loại (người đã có thẻ vẫn được trả lời theo thẻ).
+                </v-alert>
+
+                <div v-if="otherLabels.length" class="aar-taggroup-title mt-2">Thẻ khác của nick — xếp vào nhóm nào?</div>
+                <p v-if="otherLabels.length" class="aar-hint">Thẻ chưa xếp = <strong>Không trả lời</strong> (vd "Nguồn Hàng", "Thể Thao"). Thẻ công việc với khách (vd "Đơn ngày mai") nên xếp vào Khách Hàng.</p>
+                <div v-for="l in otherLabels" :key="l.text" class="aar-labelmap">
+                  <span class="aar-labelmap-name">{{ l.text }} <span class="aar-count">{{ l.count }} người</span></span>
+                  <v-btn-toggle :model-value="form.labelGroups[l.text] || 'ignore'" mandatory density="compact" variant="outlined" divided color="teal"
+                    @update:model-value="(v: LabelGroup) => setLabelGroup(l.text, v)">
+                    <v-btn value="customer" size="x-small">Khách Hàng</v-btn>
+                    <v-btn value="staff" size="x-small">Nhân Viên</v-btn>
+                    <v-btn value="family" size="x-small">Người Thân</v-btn>
+                    <v-btn value="ignore" size="x-small">Không trả lời</v-btn>
+                  </v-btn-toggle>
+                </div>
+
+                <v-row dense class="mt-3">
+                  <v-col cols="12" sm="6">
+                    <v-text-field v-model="form.ownerTitle" label="AI gọi chủ nick là" placeholder="vd: anh Mẫn" density="compact" hide-details="auto" />
+                  </v-col>
+                  <v-col cols="12" sm="6">
+                    <v-text-field v-model.number="form.askDelayMinutes" type="number" min="0" max="720" label="Chưa rõ là ai: chờ bao nhiêu phút rồi AI hỏi"
+                      suffix="phút" density="compact" hide-details="auto" />
+                  </v-col>
+                </v-row>
+                <v-textarea v-model="form.askTemplate" class="mt-3" rows="2" auto-grow density="compact" :counter="600"
+                  label="Câu AI hỏi người nhắn chưa rõ (để trống = câu mặc định)"
+                  :placeholder="DEFAULT_ASK" hint="{ban} = anh/chị theo giới tính Zalo · {chu} = cách gọi chủ nick · {toi} = AI tự xưng" persistent-hint />
+                <div class="aar-hint mt-1">Ví dụ gửi cho khách nữ: <em>{{ askPreview }}</em></div>
+
+                <div class="aar-taggroup-title mt-4">Cách AI trả lời Nhân Viên</div>
+                <p class="aar-hint">
+                  AI tự học giọng từ những tin <strong>anh từng nhắn nhân viên</strong> (hội thoại mang thẻ Nhân Viên), trả lời việc tra được (giá, tồn kho, điều anh ghi dưới đây),
+                  việc cần anh quyết (xin nghỉ, tiền, sự cố…) thì ghi nhận và báo Telegram. Tin AI gửi nhân viên có dấu 🤖 để nhân viên biết là trợ lý trả lời.
+                </p>
+                <v-textarea v-model="form.staffGuide" rows="3" auto-grow max-rows="12" density="compact" :counter="8000"
+                  label="Dặn thêm khi trả lời nhân viên (tuỳ chọn)" placeholder="vd: Nhân viên hỏi lịch giao hàng thì trả lời xe đi 9h và 15h. Xưng anh, gọi em." />
+
+                <div class="d-flex align-center mt-3">
+                  <v-btn size="small" variant="text" :prepend-icon="showClasses ? 'mdi-chevron-up' : 'mdi-chevron-down'" @click="toggleClasses">
+                    Người nhắn AI đã phân loại gần đây
+                  </v-btn>
+                </div>
+                <v-table v-if="showClasses" density="compact" class="aar-classes">
+                  <thead><tr><th>Người nhắn</th><th>Nhóm</th><th>Trạng thái</th><th>Căn cứ</th><th>Lúc</th></tr></thead>
+                  <tbody>
+                    <tr v-if="!classes.length"><td colspan="5" class="text-grey">Chưa có ai.</td></tr>
+                    <tr v-for="c in classes" :key="c.id">
+                      <td><a :href="`/chat/${c.conversationId}`" target="_blank">{{ c.name || 'Không tên' }}</a></td>
+                      <td><v-chip size="x-small" :color="groupColor(c.group)" variant="tonal">{{ groupLabel(c.group) }}</v-chip></td>
+                      <td>{{ classStateLabel(c) }}</td>
+                      <td class="aar-reason">{{ c.reason }}</td>
+                      <td class="aar-nowrap">{{ fmtTime(c.updatedAt) }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </template>
+            </v-sheet>
+
             <!-- Thẻ kích hoạt của đúng nick này -->
-            <div class="aar-step mt-4">Thẻ kích hoạt</div>
+            <div class="aar-step mt-4">Thẻ kích hoạt<span v-if="form.classifyContacts" class="aar-hint"> (tuỳ chọn khi đã bật tự phân loại — người mang thẻ này được tính là Khách Hàng)</span></div>
             <div v-if="loadingTags" class="aar-hint">Đang tải thẻ…</div>
             <template v-else>
               <div class="aar-taggroup-title">Thẻ phân loại Zalo của nick <strong>{{ accountName(editingAccountId) }}</strong></div>
@@ -660,6 +744,13 @@ interface Profile {
   useProductCatalog: boolean; sendProductImages: boolean;
   notifyHandoff: boolean; handoffChatId: string | null; handoffPauseMinutes: number;
   clonedFromAccountId: string | null; clonedAt: string | null;
+  classifyContacts: boolean; labelGroups: Record<string, LabelGroup>; ownerTitle: string | null;
+  askDelayMinutes: number; askTemplate: string | null; staffGuide: string | null;
+}
+type LabelGroup = 'customer' | 'staff' | 'family' | 'ignore';
+interface ClassRow {
+  id: string; conversationId: string; name: string | null; group: string; state: string; source: string | null;
+  confidence: number | null; reason: string | null; labelApplied: boolean; askDueAt: string | null; askedAt: string | null; updatedAt: string;
 }
 interface ProfileCard extends Profile {
   accountName: string; accountStatus: string; today: Record<string, number>; clonedFromName: string | null;
@@ -741,7 +832,66 @@ const form = reactive<Omit<Profile, 'zaloAccountId'>>({
   addressByGender: true, selfPronoun: 'em',
   useProductCatalog: true, sendProductImages: true, notifyHandoff: true, handoffChatId: null, handoffPauseMinutes: 60,
   clonedFromAccountId: null, clonedAt: null,
+  classifyContacts: false, labelGroups: {}, ownerTitle: null, askDelayMinutes: 5, askTemplate: null, staffGuide: null,
 });
+
+// ── Tự phân loại người nhắn ──
+const DEFAULT_ASK = 'Dạ {toi} chào {ban} ạ. {Toi} là trợ lý AI của {chu}, hiện {chu} đang bận chưa trả lời được. {Ban} là khách hàng, nhân viên hay người thân của {chu} ạ, để {toi} báo lại cho {chu} nha?';
+const nickLabels = ref<{ missing: string[]; labels: Array<{ text: string; count: number; core: string | null }> }>({ missing: [], labels: [] });
+const loadingNickLabels = ref(false);
+const classes = ref<ClassRow[]>([]);
+const showClasses = ref(false);
+const CORE_NAMES: Record<string, string> = { customer: 'Khách Hàng', staff: 'Nhân Viên', family: 'Người Thân' };
+const coreLabelStatus = computed(() => (['customer', 'staff', 'family'] as const).map((g) => {
+  const l = nickLabels.value.labels.find((x) => x.core === g);
+  return { name: l?.text || CORE_NAMES[g], ok: !!l, count: l?.count ?? 0 };
+}));
+const otherLabels = computed(() => nickLabels.value.labels.filter((l) => !l.core));
+const askPreview = computed(() => {
+  const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+  const chu = form.ownerTitle?.trim() || 'chủ shop';
+  const toi = form.selfPronoun?.trim() || 'em';
+  return (form.askTemplate?.trim() || DEFAULT_ASK)
+    .replace(/\{Ban\}/g, 'Chị').replace(/\{ban\}/g, 'chị')
+    .replace(/\{Chu\}/g, cap(chu)).replace(/\{chu\}/g, chu)
+    .replace(/\{Toi\}/g, cap(toi)).replace(/\{toi\}/g, toi);
+});
+function setLabelGroup(text: string, g: LabelGroup) {
+  const next = { ...form.labelGroups };
+  if (g === 'ignore') delete next[text]; else next[text] = g;
+  form.labelGroups = next;
+}
+async function loadNickLabels(accountId: string) {
+  loadingNickLabels.value = true;
+  try {
+    const { data } = await api.get(`/ai/auto-reply/profiles/${accountId}/labels`);
+    nickLabels.value = { missing: data.missing ?? [], labels: data.labels ?? [] };
+  } catch {
+    nickLabels.value = { missing: [], labels: [] };
+  } finally {
+    loadingNickLabels.value = false;
+  }
+}
+async function toggleClasses() {
+  showClasses.value = !showClasses.value;
+  if (showClasses.value && editingAccountId.value) {
+    try { classes.value = (await api.get(`/ai/auto-reply/profiles/${editingAccountId.value}/classes`)).data.classes; } catch { classes.value = []; }
+  }
+}
+function groupLabel(g: string) {
+  return ({ customer: 'Khách Hàng', staff: 'Nhân Viên', family: 'Người Thân', other: 'Khác', unknown: 'Chưa rõ' } as Record<string, string>)[g] || g;
+}
+function groupColor(g: string) {
+  return ({ customer: 'success', staff: 'indigo', family: 'pink', other: 'grey', unknown: 'warning' } as Record<string, string>)[g] || 'grey';
+}
+function classStateLabel(c: ClassRow) {
+  if (c.state === 'asking') return `chờ hỏi lúc ${c.askDueAt ? fmtTime(c.askDueAt) : '…'}`;
+  if (c.state === 'asked') return 'đã hỏi, chờ trả lời';
+  if (c.state === 'unresolved') return 'chưa rõ (đã báo anh)';
+  if (c.state === 'owner_cleared') return 'anh đã gỡ thẻ';
+  const src = c.source === 'answer' ? 'tự trả lời' : c.source === 'label' ? 'theo thẻ' : 'AI đoán';
+  return `${src}${c.labelApplied ? ' · đã gắn thẻ' : ''}`;
+}
 
 // ── Học theo nick khác ──
 const cloneSource = ref<string | null>(null);
@@ -1207,6 +1357,9 @@ async function loadEditor(accountId: string) {
   editingConfigured.value = !!data.configured;
   if (data.configured) void loadLearning(accountId).catch(() => {});
   else { lessons.value = []; quality.value = []; }
+  showClasses.value = false;
+  classes.value = [];
+  void loadNickLabels(accountId);
   // Thẻ đã lưu mà nick không còn (vd thẻ Zalo bị xoá) vẫn hiện để bỏ chọn được.
   const available = new Set([...zaloTags.value, ...crmTags.value].map((o) => o.value));
   const missing = form.triggerTags.filter((t) => !available.has(t));
@@ -1248,7 +1401,9 @@ async function selectNewAccount(id: string | null) {
 
 async function saveProfile() {
   if (!editingAccountId.value) return;
-  if (form.enabled && form.triggerTags.length === 0) {
+  if (form.enabled && form.classifyContacts && nickLabels.value.missing.length) {
+    toast.warning(`Nick chưa có thẻ ${nickLabels.value.missing.join(', ')} trên Zalo: AI chưa tự phân loại được.`);
+  } else if (form.enabled && !form.classifyContacts && form.triggerTags.length === 0) {
     toast.warning('Chưa chọn thẻ kích hoạt nào: AI sẽ không trả lời ai cả.');
   }
   saving.value = true;
@@ -1368,6 +1523,10 @@ onMounted(loadAll);
 .aar-taggroup-title { font-size: 13px; margin-bottom: 4px; }
 .aar-count { margin-left: 6px; font-size: 11px; opacity: 0.7; }
 .aar-clone { padding: 12px 14px; border-color: rgba(103, 58, 183, 0.45) !important; background: rgba(103, 58, 183, 0.05); }
+.aar-classify { padding: 12px 14px; border-color: rgba(0, 150, 136, 0.45) !important; background: rgba(0, 150, 136, 0.05); }
+.aar-labelmap { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px dashed rgba(var(--v-theme-on-surface), 0.12); }
+.aar-labelmap-name { font-size: 14px; }
+.aar-classes .aar-reason { max-width: 320px; font-size: 12px; }
 .aar-hint { font-size: 13px; color: rgba(var(--v-theme-on-surface), 0.65); margin: 4px 0 8px; }
 .aar-reply { white-space: pre-wrap; margin-top: 4px; }
 .aar-nowrap { white-space: nowrap; }

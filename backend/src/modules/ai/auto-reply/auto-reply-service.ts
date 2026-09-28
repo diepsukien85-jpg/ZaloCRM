@@ -29,7 +29,9 @@ import { isCatalogEnabled, renderProducts, searchProducts, type CatalogProduct, 
 import { notifyHandoff } from './handoff-notify.js';
 import { imageUrlOf, understandCustomerImages } from './image-understanding.js';
 import { sendToThread } from '../../api/public-api-routes.js';
-import { buildAutoReplyContext, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
+import { buildAutoReplyContext, buildStaffSystemPrompt, buildSystemPrompt, pickGuideFiles, renderReferences, renderSources, renderUserPrompt } from './context-builder.js';
+import { _clearLabelCache, nickZaloLabels, staffStyleExamples, threadZaloLabels } from './contact-classifier.js';
+import { resolveAudience, startClassifySweeper } from './classify-flow.js';
 import {
   cleanStyle, enforceHonesty, enforceNoCredentials, fold, localHour, matchesAnyKeyword,
   normalizeTagName, parseDecision, withinHours,
@@ -74,38 +76,14 @@ export async function getConversationTags(conv: {
 
 // ── Thẻ phân loại Zalo "sống" (không chờ đồng bộ 15 phút) ──────────────────
 
-const LIVE_LABEL_TTL_MS = 60_000;
-const liveLabelCache = new Map<string, { at: number; labels: Array<{ text: string; conversations: string[] }> }>();
-
 /**
  * Thẻ phân loại Zalo của 1 hội thoại, đọc thẳng từ Zalo (getLabels) — vì đồng bộ
  * thẻ về CRM chạy 15 phút/lần, chủ shop vừa gắn thẻ "Bot AI" mà khách nhắn ngay
- * thì DB chưa có. Cache 60 giây mỗi nick (tối đa 1 lần gọi Zalo / phút / nick).
- * Lỗi / nick mất kết nối → [].
+ * thì DB chưa có. Cache 60 giây mỗi nick (xem contact-classifier). Lỗi / nick mất kết nối → [].
  */
 export async function liveZaloLabels(zaloAccountId: string, threadId: string | null): Promise<string[]> {
-  if (!threadId || zaloPool.getInstance(zaloAccountId)?.status !== 'connected') return [];
-  let hit = liveLabelCache.get(zaloAccountId);
-  if (!hit || Date.now() - hit.at > LIVE_LABEL_TTL_MS) {
-    try {
-      const res = await zaloOps.exec(
-        { accountId: zaloAccountId, category: 'query', operation: 'getLabels(ai)' },
-        (api: any) => api.getLabels(),
-      ) as { labelData?: Array<{ text?: string; conversations?: unknown[] }> } | null;
-      hit = {
-        at: Date.now(),
-        labels: (res?.labelData ?? []).map((l) => ({
-          text: String(l.text ?? ''),
-          conversations: Array.isArray(l.conversations) ? l.conversations.map(String) : [],
-        })),
-      };
-      liveLabelCache.set(zaloAccountId, hit);
-    } catch (err: any) {
-      logger.debug(`[ai-auto-reply] getLabels lỗi nick=${zaloAccountId}: ${err?.message ?? err}`);
-      return [];
-    }
-  }
-  return hit.labels.filter((l) => l.text && l.conversations.includes(threadId)).map((l) => l.text);
+  if (!threadId) return [];
+  return (await threadZaloLabels(zaloAccountId, threadId)) ?? [];
 }
 
 /** Thẻ của hội thoại từ DB; nếu chưa khớp thẻ kích hoạt thì hỏi thêm Zalo (thẻ vừa gắn). */
@@ -118,7 +96,7 @@ async function conversationTagsWithLive(conv: { zaloAccountId: string; externalT
 
 /** Chỉ cho test. */
 export function _clearLiveLabelCache(): void {
-  liveLabelCache.clear();
+  _clearLabelCache();
 }
 
 /** Thẻ kích hoạt đầu tiên khớp (so theo tên đã chuẩn hoá), null nếu không khớp. */
@@ -164,13 +142,14 @@ export async function resolveCustomerGender(conv: {
 
 // ── Nhật ký ────────────────────────────────────────────────────────────────
 
-type LogTarget = { orgId: string; conversationId: string; zaloAccountId: string };
+type LogTarget = { orgId: string; conversationId: string; zaloAccountId: string; audience?: 'customer' | 'staff' | 'classify' };
 
 async function writeLog(t: LogTarget, sourceMessageId: string | null, decision: Decision, reason: string, content?: string | null, latencyMs?: number, customerText?: string) {
   const { orgId, conversationId, zaloAccountId } = t;
   await prisma.aiAutoReplyLog.create({
     data: {
       orgId, conversationId, zaloAccountId, sourceMessageId, decision, reason: reason.slice(0, 500),
+      audience: t.audience ?? 'customer',
       content: content ?? null, latencyMs: latencyMs ?? null,
       // Tin khách đã trả lời — vòng tự học cần để đối chiếu với cách nhân viên xử lý.
       customerText: customerText ? customerText.slice(0, 2000) : null,
@@ -310,13 +289,17 @@ export async function evaluateConversation(
   if (!cfg.enabled && !test) return { decision: 'skipped', reason: 'tắt' };
   // Chạy thử không ghi nhật ký (không tính vào trần ngày).
   const target: LogTarget = { orgId, conversationId, zaloAccountId: conv.zaloAccountId };
+  // Nhóm người nhắn được xác định bên dưới (tự phân loại) — nhật ký đọc giá trị lúc ghi.
+  let logAudience: 'customer' | 'staff' = 'customer';
   const log = test
     ? async (..._args: unknown[]) => {}
-    : (...args: [string | null, Decision, string, (string | null)?, number?, string?]) => writeLog(target, ...args);
+    : (...args: [string | null, Decision, string, (string | null)?, number?, string?]) => writeLog({ ...target, audience: logAudience }, ...args);
 
-  const tags = await conversationTagsWithLive(conv, cfg.triggerTags);
+  // Tự phân loại: xét nhóm người nhắn ở dưới (cần tin chờ). Không bật: chỉ trả lời hội thoại có thẻ kích hoạt.
+  const classify = cfg.classifyContacts;
+  const tags = classify ? await getConversationTags(conv) : await conversationTagsWithLive(conv, cfg.triggerTags);
   const trigger = matchTriggerTag(tags, cfg.triggerTags);
-  if (!trigger) return { decision: 'skipped', reason: 'không có thẻ kích hoạt' };
+  if (!classify && !trigger) return { decision: 'skipped', reason: 'không có thẻ kích hoạt' };
 
   const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { timezone: true } });
   const offset = parseOffsetMinutes(org?.timezone);
@@ -376,6 +359,48 @@ export async function evaluateConversation(
 
   const convInfo = conv as { id: string; zaloAccountId: string; externalThreadId: string; contactId: string | null };
 
+  // Người nhắn là ai: khách → tư vấn; nhân viên → trả lời kiểu nhắn nhân viên; còn lại → im / hỏi danh tính.
+  let audience: 'customer' | 'staff' = 'customer';
+  let via = trigger ? `thẻ "${trigger}"` : '';
+  if (classify) {
+    const nickLabels = await nickZaloLabels(conv.zaloAccountId);
+    const contactRow = conv.contactId
+      ? await prisma.contact.findUnique({ where: { id: conv.contactId }, select: { fullName: true, crmName: true } })
+      : null;
+    const d = await resolveAudience({
+      orgId, conv: convInfo, cfg,
+      zaloLabels: nickLabels ? nickLabels.filter((l) => l.text && l.conversations.includes(convInfo.externalThreadId)).map((l) => l.text) : null,
+      nickLabelNames: nickLabels ? nickLabels.map((l) => l.text) : null,
+      crmTags: tags,
+      pendingText: customerText || '(gửi ảnh)',
+      lastPendingAt: lastPending.sentAt,
+      displayName: contactRow?.crmName || contactRow?.fullName || null,
+      test,
+    });
+    if (d.kind === 'stop') {
+      const live = !test && cfg.mode === 'auto';
+      if (d.say && live) {
+        await sendReply(orgId, convInfo, d.say, { markReplied: false }).catch((err) => logger.warn(`[ai-auto-reply] gửi câu ngắn lỗi: ${err?.message ?? err}`));
+      }
+      if (d.log && !test) await writeLog({ ...target, audience: 'classify' }, lastPending.id, 'skipped', d.reason, d.say && live ? d.say : null, Date.now() - started, customerText);
+      if (d.notify && !test && cfg.notifyHandoff) {
+        const acc = await prisma.zaloAccount.findUnique({ where: { id: conv.zaloAccountId }, select: { displayName: true } });
+        void notifyHandoff({
+          conversationId, nickName: acc?.displayName || 'Zalo', customerName: contactRow?.crmName || contactRow?.fullName || 'Người nhắn',
+          urgent: false, reason: `${d.notify} · ${d.reason}`, customerText, botReply: d.say && live ? d.say : null, kind: 'identity',
+        }, { chatId: cfg.handoffChatId, pauseMinutes: cfg.handoffPauseMinutes });
+      }
+      return { decision: 'skipped', reason: d.reason };
+    }
+    audience = d.audience;
+    via = d.via;
+    if (d.justAnswered) {
+      customerText += `\n[Người nhắn vừa trả lời câu hỏi danh tính của trợ lý, xác nhận là ${audience === 'staff' ? 'nhân viên' : 'khách hàng'}: cảm ơn ngắn rồi trả lời luôn điều họ nhắn trước đó trong lịch sử (nếu có)]`;
+    }
+  }
+  const staff = audience === 'staff';
+  logAudience = audience;
+
   /**
    * Chuyển cho người thật: (1) nói 1 câu với khách nếu có (không đánh dấu "đã trả lời"
    * để hội thoại vẫn nằm ở Chưa rep cho nhân viên thấy), (2) ghi nhật ký,
@@ -409,12 +434,13 @@ export async function evaluateConversation(
         customerText,
         botReply: say && live ? say : null,
         dryRun: cfg.mode === 'dry_run',
+        kind: staff ? 'staff' : 'customer',
       }, { chatId: cfg.handoffChatId, pauseMinutes: cfg.handoffPauseMinutes });
     }
     return { decision: 'handoff', reason, content: say ?? undefined };
   };
 
-  const blocked = matchesAnyKeyword(customerText, cfg.blockedKeywords);
+  const blocked = staff ? null : matchesAnyKeyword(customerText, cfg.blockedKeywords);
   if (blocked) return handoff(`KHẨN · khách nhắc tới "${blocked}"`, null, true);
 
   const { start: dayStart } = orgDayRange(now, org?.timezone);
@@ -479,12 +505,22 @@ export async function evaluateConversation(
   }
   const productsBlock = renderProducts(products);
 
+  // Nhân viên: không dùng kịch bản / mẫu tin chăm sóc khách, dùng giọng chủ nick nhắn nhân viên.
+  const promptCtx = staff ? { ...ctx, playbook: [], templates: [] } : ctx;
+  const systemPrompt = staff
+    ? buildStaffSystemPrompt({
+        ownerTitle: cfg.ownerTitle,
+        staffGuide: cfg.staffGuide,
+        styleExamples: await staffStyleExamples(orgId, conv.zaloAccountId, cfg).catch(() => []),
+        products: productsBlock,
+      })
+    : buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references, addressing, productsBlock, {
+        firstMessage: !ctx.history.some((h) => h.startsWith('shop')),
+        ownerLessons,
+      });
   let raw: string;
   try {
-    raw = await generateText(ai.provider, apiKey, ai.model, buildSystemPrompt(cfg.persona, cfg.extraInstruction, lessons, references, addressing, productsBlock, {
-      firstMessage: !ctx.history.some((h) => h.startsWith('shop')),
-      ownerLessons,
-    }), renderUserPrompt(ctx), 1000);
+    raw = await generateText(ai.provider, apiKey, ai.model, systemPrompt, renderUserPrompt(promptCtx), 1000);
   } catch (err: any) {
     await log(lastPending.id, 'error', `gọi AI lỗi: ${err?.message ?? err}`);
     return { decision: 'error', reason: 'gọi AI lỗi' };
@@ -501,12 +537,13 @@ export async function evaluateConversation(
   if (cfg.verifyGrounding) {
     const checked = await verifyGrounding({ provider: ai.provider, apiKey, model: ai.model, reply: text,
       moneySources: focusPriceSource(products, decision.productIds),
-      sources: renderSources(ctx)
+      sources: renderSources(promptCtx)
       // Tin khách đang chờ (kèm mô tả ảnh khách gửi) — thiếu phần này kiểm duyệt tưởng
       // "mẫu này bên em có bán" là bịa và viết lại thành "để em kiểm tra".
       + `\n\n<tin_khach_vua_gui>\n${customerText}\n</tin_khach_vua_gui>`
-      + (cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
-      + (references.length ? `\n\n${renderReferences(references)}` : '')
+      + (!staff && cfg.extraInstruction?.trim() ? `\n\n<huong_dan_cua_shop>\n${cfg.extraInstruction.trim()}\n</huong_dan_cua_shop>` : '')
+      + (staff && cfg.staffGuide?.trim() ? `\n\n<huong_dan_tra_loi_nhan_vien>\n${cfg.staffGuide.trim()}\n</huong_dan_tra_loi_nhan_vien>` : '')
+      + (!staff && references.length ? `\n\n${renderReferences(references)}` : '')
       + (productsBlock ? `\n\n${productsBlock}` : '')
       + ([...ownerLessons, ...lessons].length ? `\n\n<bai_hoc>\n${[...ownerLessons, ...lessons].map((l) => `- ${l}`).join('\n')}\n</bai_hoc>` : '') });
     if (!checked) {
@@ -519,6 +556,8 @@ export async function evaluateConversation(
       groundingRewrote = true;
     }
   }
+  // Nhân viên luôn biết tin này do AI trả lời (không nhầm là chủ nick quyết).
+  if (staff && text.trim() && !text.startsWith('🤖')) text = `🤖 ${text}`;
   if (!text.trim()) {
     await log(lastPending.id, 'error', 'tin sau lớp chặn bị rỗng');
     return { decision: 'error', reason: 'tin rỗng' };
@@ -547,7 +586,7 @@ export async function evaluateConversation(
     + (products.length ? ` · tra kho ${products.length} món` : '')
     + (groundingRewrote ? ' · kiểm duyệt đã sửa câu' : '');
   if (cfg.mode === 'dry_run' || test) {
-    await log(lastPending.id, 'dry_run', `thẻ "${trigger}"${productNote} · ${decision.reason}`, logText, latency, customerText);
+    await log(lastPending.id, 'dry_run', `${staff ? 'nhân viên · ' : ''}${via}${productNote} · ${decision.reason}`, logText, latency, customerText);
     return { decision: 'dry_run', reason: decision.reason, content: logText };
   }
 
@@ -564,7 +603,7 @@ export async function evaluateConversation(
         .catch((err) => logger.warn(`[ai-auto-reply] gửi ảnh sản phẩm lỗi: ${err?.message ?? err}`));
     }
   }
-  await log(lastPending.id, 'sent', `thẻ "${trigger}"${productNote} · ${decision.reason}`, logText, latency, customerText);
+  await log(lastPending.id, 'sent', `${staff ? 'nhân viên · ' : ''}${via}${productNote} · ${decision.reason}`, logText, latency, customerText);
   logger.info(`[ai-auto-reply] đã trả lời conv=${conversationId} (${latency}ms)`);
   return { decision: 'sent', reason: decision.reason, content: logText };
 }
@@ -663,7 +702,7 @@ async function quickFilter(orgId: string, conversationId: string, zaloAccountId:
   let accountId = zaloAccountId;
   if (accountId) {
     const early = await getProfile(orgId, accountId);
-    if (!early?.enabled || early.triggerTags.length === 0) return null;
+    if (!early?.enabled || (!early.classifyContacts && early.triggerTags.length === 0)) return null;
   }
   const conv = await prisma.conversation.findFirst({
     where: { id: conversationId, orgId },
@@ -672,7 +711,10 @@ async function quickFilter(orgId: string, conversationId: string, zaloAccountId:
   if (!conv || conv.threadType !== 'user') return null;
   accountId = conv.zaloAccountId;
   const cfg = await getProfile(orgId, accountId);
-  if (!cfg?.enabled || cfg.triggerTags.length === 0) return null;
+  if (!cfg?.enabled) return null;
+  // Tự phân loại: xét mọi tin 1-1 (nhóm người nhắn xác định lúc xét, sau khi gom tin).
+  if (cfg.classifyContacts) return cfg.debounceSeconds * 1000;
+  if (cfg.triggerTags.length === 0) return null;
   if (!matchTriggerTag(await conversationTagsWithLive(conv, cfg.triggerTags), cfg.triggerTags)) return null;
   return cfg.debounceSeconds * 1000;
 }
@@ -722,7 +764,14 @@ export function startAiAutoReply(): void {
     schedule(event.orgId, payload.conversationId, delayMs);
   });
   startLearningScheduler();
-  logger.info('[ai-auto-reply] listener đã bật — chỉ trả lời hội thoại 1-1 có thẻ kích hoạt');
+  // Hỏi danh tính người nhắn chưa rõ khi đã chờ đủ lâu (tự phân loại).
+  startClassifySweeper({
+    send: (orgId, conv, text) => sendReply(orgId, conv, text, { markReplied: false }),
+    gender: (conv) => resolveCustomerGender(conv),
+    threadLabels: (accountId, threadId) => threadZaloLabels(accountId, threadId),
+    log: (t, decision, reason, content) => writeLog({ ...t, audience: 'classify' }, null, decision, reason, content ?? null),
+  });
+  logger.info('[ai-auto-reply] listener đã bật — trả lời hội thoại 1-1 có thẻ kích hoạt / tự phân loại người nhắn');
 }
 
 /** Chỉ cho test. */

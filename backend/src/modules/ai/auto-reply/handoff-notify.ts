@@ -49,11 +49,27 @@ export type HandoffInfo = {
   customerText: string;
   botReply: string | null;
   dryRun?: boolean;
+  /** customer (mặc định) | staff = nhân viên cần chủ xử lý | identity = người nhắn chưa rõ / người thân. */
+  kind?: 'customer' | 'staff' | 'identity';
 };
 
 /** Hàm thuần: soạn tin Telegram theo mẫu của skill. */
 export function formatHandoff(h: HandoffInfo, appUrl = config.appUrl): string {
   const link = `${appUrl.replace(/\/$/, '')}/chat/${h.conversationId}`;
+  if (h.kind === 'staff' || h.kind === 'identity') {
+    const staff = h.kind === 'staff';
+    return [
+      staff
+        ? `👷 <b>NHÂN VIÊN CẦN ANH MẪN — ${h.urgent ? '🚨 KHẨN' : 'BÌNH THƯỜNG'}</b>${h.dryRun ? ' <i>(AI đang chạy thử)</i>' : ''}`
+        : '❓ <b>NGƯỜI NHẮN ZALO — CẦN ANH XEM</b>',
+      `Kênh: Zalo · nick ${esc(h.nickName)}`,
+      `${staff ? 'Nhân viên' : 'Người nhắn'}: ${esc(h.customerName)}${h.customerPhone ? ` · SĐT: ${esc(h.customerPhone)}` : ''}`,
+      `${staff ? 'Việc cần anh' : 'Tình trạng'}: ${esc(h.reason || 'không rõ')}`,
+      `Tin nhắn: ${esc(h.customerText.slice(0, 600))}`,
+      `Bot đã trả lời: ${h.botReply ? esc(h.botReply.slice(0, 400)) : '(chưa trả lời)'}`,
+      `Link hội thoại: ${link}`,
+    ].join('\n');
+  }
   return [
     `🔔 <b>CẦN ANH MẪN XỬ LÝ — ${h.urgent ? '🚨 KHẨN' : 'BÌNH THƯỜNG'}</b>${h.dryRun ? ' <i>(AI đang chạy thử)</i>' : ''}`,
     `Kênh: Zalo · nick ${esc(h.nickName)}`,
