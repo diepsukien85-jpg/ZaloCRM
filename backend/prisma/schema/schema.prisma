@@ -719,7 +719,8 @@ model CrmTag {
   group CrmTagGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@unique([orgId, name])
-  @@unique([sourceZaloLabelId]) // 1 Zalo label → 1 CrmTag mirror
+  // ID thẻ Zalo chỉ duy nhất trong 1 nick → KHÔNG unique toàn hệ thống (28/09/2026); tag định danh theo (orgId, name).
+  @@index([sourceZaloLabelId])
   @@index([orgId, category])
   @@index([orgId, groupId])
   @@index([managedBy, archivedAt])

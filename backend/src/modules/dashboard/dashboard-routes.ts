@@ -16,8 +16,9 @@ function todayRange() {
   const now = new Date();
   const vnOffset = 7 * 60 * 60 * 1000;
   const vnNow = new Date(now.getTime() + vnOffset);
-  const todayVN = new Date(vnNow.getFullYear(), vnNow.getMonth(), vnNow.getDate());
-  const today = new Date(todayVN.getTime() - vnOffset);
+  // Lấy ngày VN bằng getter UTC (không phụ thuộc múi giờ máy chủ — trước đây dùng getter local
+  // trên máy chạy +07 nên cộng 7 giờ 2 lần: "hôm nay" lệch từ 17h hôm qua, sau 17h nhảy sang ngày mai).
+  const today = new Date(Date.UTC(vnNow.getUTCFullYear(), vnNow.getUTCMonth(), vnNow.getUTCDate()) - vnOffset);
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
   return { today, tomorrow };
 }
@@ -50,8 +51,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
           prisma.appointment.count({
             where: { orgId, appointmentDate: { gte: today, lt: tomorrow }, status: 'scheduled' },
           }),
-          prisma.contact.count({ where: { orgId, createdAt: { gte: weekAgo } } }),
-          prisma.contact.count({ where: { orgId } }),
+          // Bỏ khách đã gộp (mergedInto) — khớp số trang Khách hàng.
+          prisma.contact.count({ where: { orgId, mergedInto: null, createdAt: { gte: weekAgo } } }),
+          prisma.contact.count({ where: { orgId, mergedInto: null } }),
         ]);
 
       return {
@@ -81,15 +83,15 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         Array<{ date: Date; sent: bigint; received: bigint }>
       >`
         SELECT
-          DATE(m.sent_at) AS date,
+          DATE(m.sent_at + interval '7 hours') AS date, -- sent_at lưu giờ UTC → gom theo ngày VN
           COUNT(*) FILTER (WHERE m.sender_type = 'self') AS sent,
           COUNT(*) FILTER (WHERE m.sender_type = 'contact') AS received
         FROM messages m
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.org_id = ${orgId}
-          AND m.sent_at >= ${from}::date
-          AND m.sent_at < (${to}::date + interval '1 day')
-        GROUP BY DATE(m.sent_at)
+          AND m.sent_at >= (${from}::date - interval '7 hours')
+          AND m.sent_at < (${to}::date + interval '1 day' - interval '7 hours')
+        GROUP BY DATE(m.sent_at + interval '7 hours')
         ORDER BY date ASC
       `;
 

@@ -744,7 +744,8 @@ async function findOrCreateConversation(
     return { id: existing.id };
   }
 
-  return prisma.conversation.create({
+  try {
+    return await prisma.conversation.create({
     data: {
       id: randomUUID(),
       orgId,
@@ -760,7 +761,17 @@ async function findOrCreateConversation(
       isReplied: msg.isSelf,
     },
     select: { id: true },
-  });
+    });
+  } catch (err) {
+    // 2 tin đầu tiên tới cùng lúc → lượt kia vừa tạo hội thoại (trùng khoá) → dùng lại, không bỏ tin.
+    if ((err as { code?: string })?.code !== 'P2002') throw err;
+    const again = await prisma.conversation.findFirst({
+      where: { zaloAccountId: msg.accountId, externalThreadId },
+      select: { id: true },
+    });
+    if (!again) throw err;
+    return again;
+  }
 }
 
 // Update conversation metadata after a new message

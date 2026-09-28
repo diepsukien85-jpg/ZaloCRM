@@ -658,7 +658,8 @@ async function getOwnId(accountId: string) {
 
 async function getAccountInfo(accountId: string) {
   return exec({ accountId, category: 'profile', operation: 'getAccountInfo' },
-    (api) => api.getAccountInfo());
+    // zca-js 2.x: fetchAccountInfo() → { profile } (getAccountInfo không còn) — trả profile như trước.
+    async (api) => { const r = await api.fetchAccountInfo(); return r?.profile ?? r; });
 }
 
 async function changeAccountAvatar(accountId: string, filePath: string) {
@@ -668,7 +669,8 @@ async function changeAccountAvatar(accountId: string, filePath: string) {
 
 async function setOnlineStatus(accountId: string, online: boolean) {
   return exec({ accountId, category: 'profile', operation: 'setOnlineStatus' },
-    (api) => api.setOnlineStatus(online));
+    // zca-js 2.x: updateActiveStatus(active) (setOnlineStatus không còn).
+    (api) => api.updateActiveStatus(online));
 }
 
 async function getLastOnline(accountId: string, userId: string) {

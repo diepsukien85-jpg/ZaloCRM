@@ -14,15 +14,15 @@ import { logActivity } from '../activity/activity-logger.js';
 const SILENT_THRESHOLD_DAYS = 30;
 
 export function startInteractionCron(): void {
-  // 19:00 UTC = 02:00 Vietnam time (UTC+7) — chạy sau midnight VN time
-  cron.schedule('0 19 * * *', async () => {
+  // 02:00 giờ VN — chạy sau nửa đêm (trước đây chạy 19:00 tối vì lệch múi giờ)
+  cron.schedule('0 2 * * *', async () => {
     logger.info('[interaction-cron] Scanning for silent_30d contacts...');
     try {
       await runSilentDetection();
     } catch (err) {
       logger.error('[interaction-cron] silent_30d error:', err);
     }
-  });
+  }, { timezone: 'Asia/Ho_Chi_Minh' });
   logger.info('[interaction-cron] Daily silent_30d detection scheduled (19:00 UTC / 02:00 VN)');
 }
 

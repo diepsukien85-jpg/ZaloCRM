@@ -221,3 +221,15 @@ describe('ảnh AI gửi kèm không bị tính là nhân viên trả lời', ()
     expect(pickLastHumanReply([lateImg, { sentAt: t(0), sentVia: 'automation', contentType: 'text', senderType: 'self' }])).toBe(lateImg);
   });
 });
+
+describe('lỗi gửi Zalo vĩnh viễn — không gửi lại', () => {
+  it('nhận đúng câu lỗi tiếng Việt thật', async () => {
+    const { isPermanentSendError } = await import('../src/modules/api/public-api-routes.js');
+    for (const m of ['Zalo: Bạn đang bị cấm nhắn tin cho người lạ.', 'Bạn chưa thể gửi tin nhắn đến người này vì người này chặn không nhận tin nhắn từ người lạ.',
+      'Vượt quá số request cho phép', 'Xin lỗi! Hiện tại tôi không muốn nhận tin nhắn.', 'Không thể nhận tin nhắn từ bạn.']) {
+      expect(isPermanentSendError(new Error(m))).toBe(true);
+    }
+    expect(isPermanentSendError(new Error('fetch failed'))).toBe(false);
+    expect(isPermanentSendError(new Error('Tham số không hợp lệ'))).toBe(false);
+  });
+});

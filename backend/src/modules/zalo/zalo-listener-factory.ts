@@ -161,6 +161,8 @@ export interface UserInfoCacheEntry {
 }
 
 const USER_INFO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const USER_INFO_FAIL_TTL_MS = 60 * 60 * 1000;
+const userInfoFailures = new Map<string, number>();
 
 // Fetch zaloName + avatar + globalId + username from API with a per-pool in-memory cache
 export async function resolveZaloName(
@@ -168,6 +170,10 @@ export async function resolveZaloName(
   uid: string,
   cache: Map<string, UserInfoCacheEntry>,
 ): Promise<{ zaloName: string; avatar: string; globalId: string; username: string; gender?: 'male' | 'female' | null }> {
+  // Lỗi nghiệp vụ gần đây (vd tài khoản khoá / không cho xem) → không gọi Zalo lại trong 1 giờ
+  // (trước đây 1 UID lỗi 1.069 lần — gọi Zalo mỗi tin nhắn của người đó).
+  const failedAt = userInfoFailures.get(uid);
+  if (failedAt && Date.now() - failedAt < USER_INFO_FAIL_TTL_MS) return { zaloName: '', avatar: '', globalId: '', username: '' };
   const cached = cache.get(uid);
   if (cached && Date.now() - cached.cachedAt < USER_INFO_CACHE_TTL_MS) {
     return { zaloName: cached.zaloName, avatar: cached.avatar, globalId: cached.globalId, username: cached.username, gender: cached.gender };
@@ -208,7 +214,11 @@ export async function resolveZaloName(
   if (lastErr) {
     // Mạng chập chờn từ Zalo → chỉ debug (không vào *-error.log). Lỗi thật → warn.
     if (isTransientNetErr(lastErr)) logger.debug(`[zalo] getUserInfo tạm không lấy được (mạng chập chờn) cho ${uid}`);
-    else logger.warn(`[zalo] getUserInfo failed for ${uid}:`, lastErr);
+    else {
+      logger.warn(`[zalo] getUserInfo failed for ${uid} (tạm không hỏi lại 1 giờ):`, lastErr);
+      userInfoFailures.set(uid, Date.now());
+      if (userInfoFailures.size > 5000) userInfoFailures.clear();
+    }
   }
   return { zaloName: '', avatar: '', globalId: '', username: '' };
 }

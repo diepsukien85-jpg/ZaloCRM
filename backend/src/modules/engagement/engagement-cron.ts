@@ -16,15 +16,15 @@ import { recomputeContactEngagement } from './engagement-service.js';
 const CLEANUP_RETENTION_DAYS = 84;
 
 export function startEngagementCron(): void {
-  // 19:30 UTC = 02:30 VN time
-  cron.schedule('30 19 * * *', async () => {
+  // 02:30 giờ VN (trước đây chạy 19:30 tối — giờ cao điểm — vì lệch múi giờ)
+  cron.schedule('30 2 * * *', async () => {
     logger.info('[engagement-cron] Daily classification + cleanup starting');
     try {
       await runEngagementCron();
     } catch (err) {
       logger.error('[engagement-cron] error', err);
     }
-  });
+  }, { timezone: 'Asia/Ho_Chi_Minh' });
   logger.info('[engagement-cron] scheduled daily at 19:30 UTC (02:30 VN)');
 }
 

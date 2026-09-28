@@ -188,7 +188,10 @@ export async function syncFriendsForAccount(
     try {
       sentRaw = await withZaloRetry('getSentFriendRequests', () => zaloOps.getSentFriendRequests(accountId));
     } catch (sentErr) {
-      logger.warn(`[friend-sync:${accountId}] getSentFriendRequests không khả dụng (${String((sentErr as Error)?.message ?? sentErr).slice(0, 120)}) — bỏ qua bước lời mời đã gửi, vẫn đồng bộ bạn bè`);
+      // [zalo:112] = "không có lời mời nào đang chờ" (theo ghi chú SDK) → danh sách rỗng, không phải lỗi.
+      if (/\[zalo:112\]|\b112\b/.test(String((sentErr as Error)?.message ?? sentErr)) || (sentErr as { code?: unknown })?.code === 112) {
+        logger.debug(`[friend-sync:${accountId}] không có lời mời kết bạn đang chờ (zalo:112)`);
+      } else logger.warn(`[friend-sync:${accountId}] getSentFriendRequests không khả dụng (${String((sentErr as Error)?.message ?? sentErr).slice(0, 120)}) — bỏ qua bước lời mời đã gửi, vẫn đồng bộ bạn bè`);
     }
     liveFriends = Array.isArray(liveRaw) ? liveRaw
       : Array.isArray(liveRaw?.data) ? liveRaw.data

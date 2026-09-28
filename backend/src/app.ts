@@ -83,6 +83,7 @@ import { groupRoutes } from './modules/zalo/group-routes.js';
 import { groupModerationRoutes } from './modules/zalo/group-moderation-routes.js';
 import { friendRoutes } from './modules/zalo/friend-routes.js';
 import { profileRoutes } from './modules/zalo/profile-routes.js';
+import { campaignRoutes } from './modules/campaign/campaign-routes.js';
 import { credentialRoutes } from './modules/zalo/credential-routes.js';
 import { eventBuffer } from './shared/event-buffer.js';
 // Plugin architecture — xem core/plugin-host.ts
@@ -254,6 +255,8 @@ async function bootstrap() {
   await app.register(groupModerationRoutes);
   await app.register(friendRoutes);
   await app.register(profileRoutes);
+  // Chiến dịch kết bạn + lịch sử thử kết bạn của khách (ContactDetailDialog) — bị rơi mất ở commit revert 7ecdf63.
+  await app.register(campaignRoutes);
   await app.register(credentialRoutes);
 
   // Liveness/readiness probe — also checks DB connectivity
@@ -382,6 +385,8 @@ async function bootstrap() {
       // AI tự trả lời 1-1 — bám event bus của engine, chỉ xét hội thoại có thẻ kích hoạt.
       const { startAiAutoReply } = await import('./modules/ai/auto-reply/auto-reply-service.js');
       startAiAutoReply();
+      // Bảng daily_message_stats (uptime nick, thời gian phản hồi, hiệu suất nhóm) — trước đây không ai ghi.
+      void import('./modules/analytics/daily-stats-aggregator.js').then((mod) => mod.startDailyStatsAggregator());
       // Phase F — Broadcast scheduler: poll automation_broadcasts scheduled→running
       const { startBroadcastScheduler } = await import('./modules/automation/broadcasts/broadcast-scheduler.js');
       startBroadcastScheduler();

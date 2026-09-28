@@ -68,6 +68,9 @@ function defaultReason(status: ZaloStatus): StatusReason {
   }
 }
 
+const LOGIN_FAIL_LIMIT = 6;
+const LOGIN_FAIL_PAUSE_MS = 6 * 60 * 60 * 1000;
+
 class ZaloAccountPool {
   private instances = new Map<string, ZaloInstance>();
   private io: Server | null = null;
@@ -85,6 +88,9 @@ class ZaloAccountPool {
   // Đảm bảo startup + health-check 5' + listener onDisconnected chỉ tạo tối đa 1 chuỗi
   // / account → không chồng nhiều chuỗi retry. Khác `reconnecting` (khoá 1 lần login).
   private autoReconnectActive = new Set<string>();
+  // Đăng nhập thất bại liên tiếp (phiên chết, cần quét QR). Quá LOGIN_FAIL_LIMIT lần → chỉ thử lại
+  // mỗi LOGIN_FAIL_PAUSE_MS (trước đây ~18 lần/giờ/nick mãi mãi → Zalo dễ đánh dấu nick, rác log).
+  private loginFails = new Map<string, { count: number; at: number }>();
   // Đang tắt server (SIGTERM) — chặn mọi auto-reconnect khi listener 'closed' do ta
   // chủ động stop, để Zalo nhận close frame sạch và giải phóng session.
   private shuttingDown = false;
@@ -296,6 +302,7 @@ class ZaloAccountPool {
       } catch {}
 
       this.attachListener(accountId, api);
+      this.loginFails.delete(accountId);
       await this.updateAccountDB(accountId, 'connected', ownId, 'reconnect_ok');
       this.io?.emit('zalo:connected', { accountId, zaloUid: ownId });
       prisma.zaloAccount.findUnique({ where: { id: accountId }, select: { orgId: true } })
@@ -320,6 +327,13 @@ class ZaloAccountPool {
       logger.warn(`[zalo:${accountId}] Reconnect FAILED tại step=${step}: ${err?.name || 'Error'}: ${err?.message || String(err)}${zCode}`);
       await this.updateAccountDB(accountId, 'qr_pending', null, 'reconnect_failed');
       this.io?.emit('zalo:reconnect-failed', { accountId, error: String(err) });
+      if (step === 'login') {
+        const n = (this.loginFails.get(accountId)?.count ?? 0) + 1;
+        this.loginFails.set(accountId, { count: n, at: Date.now() });
+        if (n === LOGIN_FAIL_LIMIT) {
+          logger.warn(`[zalo:${accountId}] Đăng nhập thất bại ${n} lần liền — phiên có thể đã chết, cần quét QR lại. Tạm chỉ thử lại mỗi 6 giờ.`);
+        }
+      }
       return false;
     } finally {
       this.reconnecting.delete(accountId);
@@ -481,6 +495,8 @@ class ZaloAccountPool {
    */
   ensureReconnecting(accountId: string): void {
     if (this.manuallyDisabled.has(accountId)) return;
+    const fails = this.loginFails.get(accountId);
+    if (fails && fails.count >= LOGIN_FAIL_LIMIT && Date.now() - fails.at < LOGIN_FAIL_PAUSE_MS) return;
     if (this.autoReconnectActive.has(accountId)) return; // đã có chuỗi đang chạy
     const st = this.instances.get(accountId)?.status;
     if (st === 'connected' || st === 'connecting' || st === 'qr_pending') return; // đang ok / đang login

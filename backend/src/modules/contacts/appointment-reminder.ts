@@ -9,8 +9,8 @@ import { prisma } from '../../shared/database/prisma-client.js';
 import { logger } from '../../shared/utils/logger.js';
 
 export function startAppointmentReminder(io: Server): void {
-  // 01:00 UTC = 08:00 Vietnam time (UTC+7)
-  cron.schedule('0 1 * * *', async () => {
+  // 08:00 giờ VN (trước đây chạy 01:00 sáng vì lệch múi giờ)
+  cron.schedule('0 8 * * *', async () => {
     logger.info('[reminder] Checking tomorrow appointments...');
 
     try {
@@ -53,7 +53,7 @@ export function startAppointmentReminder(io: Server): void {
     } catch (err) {
       logger.error('[reminder] Cron job error:', err);
     }
-  });
+  }, { timezone: 'Asia/Ho_Chi_Minh' });
 
   logger.info('[reminder] Appointment reminder cron started (daily 01:00 UTC)');
 
