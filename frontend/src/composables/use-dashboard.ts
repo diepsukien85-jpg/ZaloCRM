@@ -31,6 +31,12 @@ export interface AppointmentStatusItem {
   _count: { _all: number } | number;
 }
 
+// API trả { data: [{ ..., count }] } — chuẩn hoá về field `_count` mà các chart đang dùng
+function unwrapCounts<T>(body: any): T[] {
+  const rows = Array.isArray(body) ? body : (body?.data ?? []);
+  return rows.map((r: any) => ({ ...r, _count: r._count ?? r.count ?? 0 }));
+}
+
 export function useDashboard() {
   const kpi = ref<KpiData | null>(null);
   const messageVolume = ref<MessageVolumeItem[]>([]);
@@ -51,9 +57,9 @@ export function useDashboard() {
       ]);
       kpi.value = kpiRes.data;
       messageVolume.value = volRes.data.data || volRes.data;
-      pipeline.value = pipRes.data;
-      sources.value = srcRes.data;
-      appointments.value = aptRes.data;
+      pipeline.value = unwrapCounts<PipelineItem>(pipRes.data);
+      sources.value = unwrapCounts<SourceItem>(srcRes.data);
+      appointments.value = unwrapCounts<AppointmentStatusItem>(aptRes.data);
     } catch (err) {
       console.error('Dashboard fetch error:', err);
     } finally {

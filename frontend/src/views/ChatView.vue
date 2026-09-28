@@ -134,7 +134,7 @@ const {
   loadingConvs, loadingMsgs, sendingMsg, searchQuery, accountFilter, extraFilters,
   aiSuggestion, aiSuggestionLoading, aiSuggestionError,
   aiSummary, aiSummaryLoading, aiSentiment, aiSentimentLoading,
-  fetchConversations, fetchAiConfig, fetchMessages, selectConversation, sendMessage,
+  fetchConversations, fetchAiConfig, fetchMessages, selectConversation, refreshConversationDetail, sendMessage,
   generateAiSuggestion, generateAiSummary, generateAiSentiment,
   initSocket, destroySocket, getSocket,
   typingConvIds,
@@ -389,9 +389,11 @@ watch(
 
 // Listener cho zalo-labels-synced custom event (dispatch từ MessageThread sau khi
 // touch/assign/sync labels). Refetch conversation detail để update friendship.zaloLabels.
+// MessageThread dispatch event này MỖI lần đổi conv (touchAccountSync) → chỉ refetch
+// detail, KHÔNG gọi selectConversation (sẽ load messages + mark-read lần 2).
 function onLabelsSynced() {
   if (selectedConvId.value) {
-    selectConversation(selectedConvId.value);
+    void refreshConversationDetail(selectedConvId.value);
   }
 }
 
@@ -500,18 +502,33 @@ watch(searchQuery, () => {
     grid-template-columns: 56px 320px 1fr;
   }
 }
-/* < 1200: drop filter rail */
+/* < 1200: drop filter rail.
+   Phần tử display:none KHÔNG chiếm track grid → không được để track "0" đầu tiên
+   (nếu không conv list rơi vào track 0px). Liệt kê đủ các biến thể :has() của
+   tier trên để override đúng specificity (collapsed / không có info panel). */
 @media (max-width: 1200px) {
-  .smax-chat-grid { grid-template-columns: 0 320px 1fr 280px; }
-  .smax-chat-grid:not(:has(.smax-info-col)) {
-    grid-template-columns: 0 320px 1fr;
+  .smax-chat-grid,
+  .smax-chat-grid:has(.filter-rail.collapsed),
+  .smax-chat-grid:has(.filter-sidebar.collapsed) {
+    grid-template-columns: 320px 1fr 280px;
+  }
+  .smax-chat-grid:not(:has(.smax-info-col)),
+  .smax-chat-grid:has(.filter-rail.collapsed):not(:has(.smax-info-col)),
+  .smax-chat-grid:has(.filter-sidebar.collapsed):not(:has(.smax-info-col)) {
+    grid-template-columns: 320px 1fr;
   }
   .smax-chat-grid > :first-child { display: none; }
 }
 /* < 1024: drop info panel too — chỉ còn conv list + thread */
 @media (max-width: 1024px) {
-  .smax-chat-grid { grid-template-columns: 320px 1fr; }
+  .smax-chat-grid,
+  .smax-chat-grid:has(.filter-rail.collapsed),
+  .smax-chat-grid:has(.filter-sidebar.collapsed),
+  .smax-chat-grid:has(.filter-rail.collapsed):not(:has(.smax-info-col)),
+  .smax-chat-grid:has(.filter-sidebar.collapsed):not(:has(.smax-info-col)) {
+    grid-template-columns: 320px 1fr;
+  }
   .smax-chat-grid > :first-child,
-  .smax-chat-grid > :nth-child(4) { display: none; }
+  .smax-chat-grid > .smax-info-col { display: none; }
 }
 </style>

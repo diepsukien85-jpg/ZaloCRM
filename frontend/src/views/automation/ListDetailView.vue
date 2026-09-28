@@ -6,9 +6,21 @@
         <v-icon size="14">mdi-folder-account-outline</v-icon> Tệp khách hàng
       </a>
       <span class="sep">›</span>
-      <span>{{ currentList?.name ?? '...' }}</span>
+      <span>{{ listNotFound ? 'Không tìm thấy' : (currentList?.name ?? '...') }}</span>
     </div>
 
+    <!-- Not-found: id sai / tệp đã xoá → không render bảng rỗng gây hiểu nhầm -->
+    <div v-if="listNotFound" class="at-empty">
+      <v-icon size="48">mdi-folder-alert-outline</v-icon>
+      <div class="at-empty__title">Không tìm thấy danh sách</div>
+      <p class="at-empty__desc">Tệp khách hàng này không tồn tại hoặc đã bị xoá.</p>
+      <button class="at-btn at-btn--primary" @click="$router.push('/automation/bot/lists')">
+        <v-icon size="18">mdi-arrow-left</v-icon>
+        Về danh sách tệp
+      </button>
+    </div>
+
+    <template v-else>
     <!-- Hero: title + actions + stats -->
     <div v-if="currentList" class="detail-hero">
       <div class="hero-head">
@@ -539,6 +551,7 @@
       <span class="div"></span>
       <button class="x" @click="clearSelection">✕</button>
     </div>
+    </template>
   </div>
 </template>
 
@@ -592,17 +605,20 @@ const notScannedSdk = computed<number>(() => {
   return Math.max(0, l.validEntries - l.hasZaloEntries - l.noZaloEntries - dupTotal);
 });
 
-onMounted(async () => {
-  await fetchListById(listId.value);
-  await fetchEntries(listId.value);
-});
+// true khi GET /customer-lists/:id lỗi (404 / id sai) → hiện trạng thái "Không tìm thấy"
+const listNotFound = ref(false);
+
+async function loadList(id: string) {
+  const list = await fetchListById(id);
+  listNotFound.value = !list;
+  if (list) await fetchEntries(id);
+}
+
+onMounted(() => loadList(listId.value));
 
 // Re-fetch khi route id change
 watch(listId, async (newId) => {
-  if (newId) {
-    await fetchListById(newId);
-    await fetchEntries(newId);
-  }
+  if (newId) await loadList(newId);
 });
 
 function setTab(tab: typeof entryTab.value) {

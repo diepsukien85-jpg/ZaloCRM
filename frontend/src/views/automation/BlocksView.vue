@@ -208,7 +208,7 @@ async function loadAll() {
     const [b, f, statusRes] = await Promise.all([
       blocksApi.listBlocks({ includeArchived: true, limit: 500 }),
       blocksApi.listFolders(),
-      api.get<{ statuses: Array<{ id: string; name: string }> }>('/statuses').then((r) => r.data.statuses).catch(() => []),
+      api.get<{ statuses: Array<{ id: string; name: string }> }>('/settings/statuses').then((r) => r.data.statuses).catch(() => []),
     ]);
     blocks.value = b;
     folders.value = f;

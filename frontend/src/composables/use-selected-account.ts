@@ -16,7 +16,9 @@ export function useSelectedAccount() {
 
   onMounted(async () => {
     await fetchAccounts();
-    if (!selectedAccountId.value && accounts.value.length > 0) {
+    // Chưa chọn, hoặc id lưu trong localStorage không còn tồn tại → lấy account đầu tiên
+    const stillExists = accounts.value.some((a) => a.id === selectedAccountId.value);
+    if ((!selectedAccountId.value || !stillExists) && accounts.value.length > 0) {
       selectAccount(accounts.value[0].id);
     }
   });

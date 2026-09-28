@@ -502,6 +502,24 @@ export function useChat() {
     }
   }
 
+  /** Chỉ refetch conv detail (contact + friendship) — KHÔNG load lại messages / mark-read.
+   *  Dùng cho các event như zalo-labels-synced (trước đây gọi lại cả selectConversation
+   *  → mỗi lần mở conv load messages 2 lần + mark-read 2 lần). */
+  function refreshConversationDetail(convId: string): Promise<void> {
+    return api
+      .get(`/conversations/${convId}`)
+      .then((convDetail) => {
+        const conv = conversations.value.find(c => c.id === convId);
+        if (conv) {
+          if (convDetail.data.contact) conv.contact = convDetail.data.contact;
+          // friendship per-pair (counter, leadScore, status RIÊNG cặp nick×KH).
+          // KHÔNG fallback contact aggregate vì các trường này khác semantics.
+          if (convDetail.data.friendship !== undefined) conv.friendship = convDetail.data.friendship;
+        }
+      })
+      .catch(() => { /* non-critical */ });
+  }
+
   async function selectConversation(convId: string) {
     selectedConvId.value = convId;
     clearAiState();
@@ -516,18 +534,7 @@ export function useChat() {
     // là fire-and-forget (UI không phụ thuộc). Trước đây await tuần tự → click-to-thread
     // = tổng 3 round-trip.
     const messagesP = fetchMessages(convId);
-    const detailP = api
-      .get(`/conversations/${convId}`)
-      .then((convDetail) => {
-        const conv = conversations.value.find(c => c.id === convId);
-        if (conv) {
-          if (convDetail.data.contact) conv.contact = convDetail.data.contact;
-          // friendship per-pair (counter, leadScore, status RIÊNG cặp nick×KH).
-          // KHÔNG fallback contact aggregate vì các trường này khác semantics.
-          if (convDetail.data.friendship !== undefined) conv.friendship = convDetail.data.friendship;
-        }
-      })
-      .catch(() => { /* non-critical */ });
+    const detailP = refreshConversationDetail(convId);
     // Fire-and-forget — không chặn thread hiển thị.
     void api
       .post(`/conversations/${convId}/mark-read`)
@@ -834,6 +841,7 @@ export function useChat() {
     fetchAiUsage,
     fetchMessages,
     selectConversation,
+    refreshConversationDetail,
     sendMessage,
     sendMessageTo,
     generateAiSuggestion,

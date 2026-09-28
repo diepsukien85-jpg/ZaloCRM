@@ -49,16 +49,22 @@ import AiDailyBriefPopup from '@/components/ai/ai-daily-brief-popup.vue';
 const theme = useTheme();
 const authStore = useAuthStore();
 const router = useRouter();
-const isDark = ref(localStorage.getItem('theme') !== 'light');
+// Dùng chung tên theme với DefaultLayout ('smax-light' | 'legacy-dark'), mặc định SÁNG.
+// Trước đây so với 'light' → giá trị mặc định 'smax-light' bị coi là dark và bật
+// theme 'dark' built-in của Vuetify (chữ trắng trên các nền trắng hard-code).
+// Giá trị cũ 'dark' (do bản mobile trước lưu) vẫn được hiểu là dark.
+const savedTheme = localStorage.getItem('theme');
+const isDark = ref(savedTheme === 'legacy-dark' || savedTheme === 'dark');
 
 onMounted(() => {
-  theme.global.name.value = isDark.value ? 'dark' : 'light';
+  theme.global.name.value = isDark.value ? 'legacy-dark' : 'smax-light';
 });
 
 function toggleTheme() {
   isDark.value = !isDark.value;
-  theme.global.name.value = isDark.value ? 'dark' : 'light';
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light');
+  const next = isDark.value ? 'legacy-dark' : 'smax-light';
+  theme.global.name.value = next;
+  localStorage.setItem('theme', next);
 }
 
 function logout() {

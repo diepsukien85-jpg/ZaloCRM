@@ -20,7 +20,11 @@ export function useGroups() {
     loading.value = true;
     try {
       const res = await api.get(base(accountId));
-      groups.value = res.data.groups ?? [];
+      // BE hiện trả raw SDK getAllGroups ({ version, gridVerMap }) thay vì mảng group
+      // → chỉ nhận mảng, tránh group-list .filter() trên object bị crash.
+      const list = res.data.groups;
+      if (!Array.isArray(list)) console.warn('[groups] API không trả mảng groups:', list && Object.keys(list));
+      groups.value = Array.isArray(list) ? list : [];
     } catch (err) {
       console.error('Failed to fetch groups:', err);
     } finally {

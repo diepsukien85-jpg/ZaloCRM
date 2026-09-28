@@ -825,6 +825,9 @@ function onPatternLeave() {
 <style scoped>
 .conv-list {
   background: var(--smax-bg);
+  /* Nền list cố định sáng (token) → chữ cũng phải cố định tối, không kế thừa
+     màu chữ theme Vuetify (dark theme = chữ trắng → tên KH "biến mất" trên mobile) */
+  color: var(--smax-text);
   display: flex; flex-direction: column;
   height: 100%; overflow: hidden;
 }

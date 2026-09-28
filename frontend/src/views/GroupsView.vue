@@ -130,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { ref, reactive, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/api/index';
 import { useSelectedAccount } from '@/composables/use-selected-account';
@@ -173,13 +173,19 @@ function notify(message: string, color = 'success') {
   snack.show = true;
 }
 
-async function onAccountChange(id: string) {
+function onAccountChange(id: string) {
   selectAccount(id);
+}
+
+// Load nhóm theo account đang chọn — cả lần đầu mount (id từ localStorage hoặc
+// account đầu tiên do useSelectedAccount tự chọn sau fetchAccounts) lẫn khi user đổi.
+// Trước đây chỉ load trong @update:model-value → vào trang luôn "Không có nhóm nào".
+watch(selectedAccountId, async (id) => {
   selectedGroupId.value = '';
   selectedGroup.value = null;
   members.value = [];
   if (id) await fetchGroups(id);
-}
+}, { immediate: true });
 
 async function onSelectGroup(groupId: string) {
   selectedGroupId.value = groupId;

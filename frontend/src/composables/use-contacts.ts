@@ -178,6 +178,9 @@ export function formatRecentDateTime(iso: string | null | undefined): string {
   return formatInOrgTz(iso);
 }
 
+/** Loại tin mà field `title` trong JSON là caption / tên tệp thật → hiện kèm nhãn. */
+const CAPTION_TYPES = new Set(['image', 'file', 'link', 'video', 'rich', 'location', 'reminder', 'poll', 'note', 'forwarded']);
+
 /** Truncated preview: 60 chars max. Falls back to media-type label when content is empty. */
 export function messagePreview(
   content: string | null | undefined,
@@ -185,10 +188,34 @@ export function messagePreview(
   maxLen = 60,
 ): string {
   const trimmed = content?.trim();
-  if (trimmed) {
-    return trimmed.length > maxLen ? trimmed.slice(0, maxLen) + '…' : trimmed;
+  const typeLabel = CONTENT_TYPE_LABEL[contentType ?? ''];
+  const cut = (t: string) => (t.length > maxLen ? t.slice(0, maxLen) + '…' : t);
+  // Tin ảnh/tệp/sticker/cuộc gọi... lưu content dạng JSON ({"title":"","href":...} hoặc
+  // [{"type":2,...}]) và preview từ BE thường BỊ CẮT giữa chừng → JSON.parse có thể fail.
+  // → KHÔNG hiện raw JSON: dùng nhãn loại tin (+ caption/tên tệp nếu có) giống list chat.
+  if (trimmed && /^(\{\s*"|\[\s*[{"\]])/.test(trimmed)) {
+    let first: Record<string, unknown> | undefined;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      first = (Array.isArray(parsed) ? parsed[0] : parsed) as Record<string, unknown> | undefined;
+    } catch {
+      // JSON bị cắt → rút "title" bằng regex (nếu còn nguyên)
+      const m = trimmed.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (m) {
+        try { first = { title: JSON.parse(`"${m[1]}"`) }; } catch { first = { title: m[1] }; }
+      }
+    }
+    const rawTitle = typeof first?.title === 'string' ? first.title.trim().replace(/\n/g, ' · ') : '';
+    const type = contentType ?? '';
+    // Chỉ các loại có caption/tên thật mới kèm title (call có title rác "sendBubbleMessage")
+    const title = !type || type === 'text' || CAPTION_TYPES.has(type) ? rawTitle : '';
+    const label = type && type !== 'text' ? (typeLabel ?? type) : '';
+    if (label) return cut(title ? `${label}: ${title}` : label);
+    if (title) return cut(title);
+    return trimmed.startsWith('[') ? '📎 Nội dung đính kèm' : '✨ Tin có định dạng';
   }
-  return CONTENT_TYPE_LABEL[contentType ?? ''] ?? (contentType ?? '');
+  if (trimmed) return cut(trimmed);
+  return typeLabel ?? (contentType ?? '');
 }
 
 export interface AccountActivityItem {
