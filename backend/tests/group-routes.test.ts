@@ -14,6 +14,7 @@ vi.mock('../src/shared/database/prisma-client.js', () => ({
     zaloAccount: { findFirst: vi.fn() },
     zaloAccountAccess: { findFirst: vi.fn() },
     groupPoll: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+    conversation: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 vi.mock('../src/shared/zalo-operations.js', () => ({
@@ -51,13 +52,22 @@ function buildApp(): FastifyInstance {
 
 beforeEach(() => { vi.clearAllMocks(); });
 
+const prismaMod = await import('../src/shared/database/prisma-client.js');
+
 // ── GET all groups ─────────────────────────────────────────────────────────────
 describe('GET /api/v1/zalo-accounts/:accountId/groups', () => {
   it('happy path — returns groups list', async () => {
-    zaloOpsMock.getAllGroups.mockResolvedValueOnce([{ groupId: 'g1' }]);
+    // SDK trả { gridVerMap: { id: ver } } (không tên) → route ghép tên / số thành viên từ hội thoại nhóm.
+    zaloOpsMock.getAllGroups.mockResolvedValueOnce({ version: '1', gridVerMap: { g1: '1', g2: '1' } });
+    (prismaMod.prisma as any).conversation.findMany.mockResolvedValueOnce([
+      { id: 'c1', externalThreadId: 'g1', groupName: 'Nhóm Sỉ', groupMembersCount: 12, groupAvatarUrl: null, lastMessageAt: new Date('2026-09-28') },
+    ]);
     const res = await buildApp().inject({ method: 'GET', url: BASE });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ groups: [{ groupId: 'g1' }] });
+    expect(JSON.parse(res.body)).toMatchObject({ groups: [
+      { id: 'g1', groupId: 'g1', name: 'Nhóm Sỉ', totalMember: 12, conversationId: 'c1' },
+      { id: 'g2', groupId: 'g2', name: null },
+    ] });
     expect(zaloOpsMock.getAllGroups).toHaveBeenCalledWith('za-1');
   });
 });
