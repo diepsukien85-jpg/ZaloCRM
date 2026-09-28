@@ -205,3 +205,19 @@ describe('vòng quét hỏi danh tính', () => {
     expect(d.send).not.toHaveBeenCalled();
   });
 });
+
+describe('ảnh AI gửi kèm không bị tính là nhân viên trả lời', () => {
+  it('pickLastHumanReply bỏ ảnh đi ra ngay sau tin AI, vẫn tính tin chữ / ảnh người gửi', async () => {
+    const { pickLastHumanReply } = await import('../src/modules/ai/auto-reply/auto-reply-service.js');
+    const t = (s: number) => new Date(Date.UTC(2026, 8, 28, 3, 0, s));
+    // mới → cũ
+    expect(pickLastHumanReply([
+      { sentAt: t(1), sentVia: 'user', contentType: 'image', senderType: 'self' },
+      { sentAt: t(0), sentVia: 'automation', contentType: 'text', senderType: 'self' },
+    ])).toBeNull();
+    const human = { sentAt: t(50), sentVia: 'user', contentType: 'text', senderType: 'self' };
+    expect(pickLastHumanReply([human, { sentAt: t(1), sentVia: 'user', contentType: 'image', senderType: 'self' }, { sentAt: t(0), sentVia: 'automation', contentType: 'text', senderType: 'self' }])).toBe(human);
+    const lateImg = { sentAt: t(59), sentVia: 'user', contentType: 'image', senderType: 'self' };
+    expect(pickLastHumanReply([lateImg, { sentAt: t(0), sentVia: 'automation', contentType: 'text', senderType: 'self' }])).toBe(lateImg);
+  });
+});

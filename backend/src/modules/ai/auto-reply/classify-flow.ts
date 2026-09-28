@@ -267,7 +267,7 @@ export async function processDueAsks(deps: SweepDeps, now = new Date()): Promise
         await deps.log(target, 'error', `gửi câu hỏi danh tính lỗi: ${err?.message ?? err}`, question);
         continue;
       }
-      await deps.log(target, 'sent', 'hỏi danh tính (khách hàng / nhân viên / người thân)', question);
+      await deps.log(target, 'sent', 'hỏi danh tính (khách hàng / người thân)', question);
       sent++;
     } catch (err) {
       logger.warn(`[ai-classify] vòng quét lỗi conv=${row.conversationId}:`, err);

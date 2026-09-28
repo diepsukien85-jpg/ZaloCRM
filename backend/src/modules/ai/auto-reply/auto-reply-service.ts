@@ -268,6 +268,46 @@ function applyGuards(text: string, customerText: string): string {
 
 export type EvaluateResult = { decision: Decision; reason: string; content?: string };
 
+/** Ảnh / tệp đi ra trong vòng này sau 1 tin AI gửi = ảnh AI gửi kèm (listener lưu lại với sentVia 'user'). */
+const AI_ECHO_WINDOW_MS = 30_000;
+
+/** Hàm thuần: tin tự gửi gần nhất do NGƯỜI gửi (bỏ tin AI + ảnh AI gửi kèm). messages xếp mới → cũ. */
+export function pickLastHumanReply<T extends { sentAt: Date; sentVia: string | null; contentType: string | null; senderType?: string }>(messages: T[]): T | null {
+  for (const m of messages) {
+    if (m.senderType !== 'self' || m.sentVia === 'automation') continue;
+    const aiJustBefore = messages.some((a) => a.sentVia === 'automation'
+      && a.sentAt.getTime() <= m.sentAt.getTime() && m.sentAt.getTime() - a.sentAt.getTime() < AI_ECHO_WINDOW_MS);
+    if (aiJustBefore && m.contentType !== 'text' && m.contentType !== 'rich') continue;
+    return m;
+  }
+  return null;
+}
+
+async function lastHumanReply(conversationId: string) {
+  const recent = await prisma.message.findMany({
+    where: { conversationId, senderType: 'self', isDeleted: false },
+    orderBy: { sentAt: 'desc' },
+    take: 10,
+    select: { sentAt: true, sentVia: true, contentType: true, senderType: true },
+  });
+  return pickLastHumanReply(Array.isArray(recent) ? recent : []);
+}
+
+/** Ảnh AI vừa gửi kèm quay về qua listener với sentVia 'user' → đánh dấu lại là AI (vòng tự học, vòng hỏi danh tính đọc đúng). */
+function markAiImageEchoes(conversationId: string, since: Date): void {
+  for (const delay of [8_000, 30_000]) {
+    setTimeout(() => {
+      prisma.message.updateMany({
+        where: {
+          conversationId, senderType: 'self', NOT: { sentVia: 'automation' }, contentType: { notIn: ['text', 'rich'] },
+          sentAt: { gte: new Date(since.getTime() - 2_000), lte: new Date(since.getTime() + AI_ECHO_WINDOW_MS) },
+        },
+        data: { sentVia: 'automation' },
+      }).catch(() => {});
+    }, delay).unref?.();
+  }
+}
+
 export async function evaluateConversation(
   orgId: string,
   conversationId: string,
@@ -339,9 +379,11 @@ export async function evaluateConversation(
     return { decision: 'skipped', reason: 'tin chờ đã quá 30 phút' };
   }
 
-  // Nhân viên đang trực hội thoại này → nhường.
-  if (!test && lastSelf && lastSelf.sentVia !== 'automation' && cfg.skipIfStaffRepliedWithinMin > 0
-    && now.getTime() - lastSelf.sentAt.getTime() < cfg.skipIfStaffRepliedWithinMin * 60_000) {
+  // Nhân viên đang trực hội thoại này → nhường. (Ảnh sản phẩm AI gửi kèm quay về qua listener với
+  // sentVia 'user' — không được tính là người trả lời, xem lastHumanReply.)
+  const lastHuman = test ? null : await lastHumanReply(conversationId);
+  if (!test && lastHuman && cfg.skipIfStaffRepliedWithinMin > 0
+    && now.getTime() - lastHuman.sentAt.getTime() < cfg.skipIfStaffRepliedWithinMin * 60_000) {
     await log(lastPending.id, 'skipped', 'nhân viên vừa trả lời');
     return { decision: 'skipped', reason: 'nhân viên vừa trả lời' };
   }
@@ -395,7 +437,7 @@ export async function evaluateConversation(
     audience = d.audience;
     via = d.via;
     if (d.justAnswered) {
-      customerText += `\n[Người nhắn vừa trả lời câu hỏi danh tính của trợ lý, xác nhận là ${audience === 'staff' ? 'nhân viên' : 'khách hàng'}: cảm ơn ngắn rồi trả lời luôn điều họ nhắn trước đó trong lịch sử (nếu có)]`;
+      customerText += `\n[Người nhắn vừa trả lời câu hỏi danh tính của trợ lý, xác nhận là ${audience === 'staff' ? 'nhân viên' : 'khách hàng'}: KHÔNG chào lại (trợ lý đã chào trong câu hỏi), cảm ơn ngắn rồi trả lời luôn điều họ hỏi (kể cả điều hỏi trước đó trong lịch sử)]`;
     }
   }
   const staff = audience === 'staff';
@@ -599,8 +641,10 @@ export async function evaluateConversation(
   if (imageProducts.length) {
     const api = zaloPool.getInstance(conv.zaloAccountId)?.api;
     if (api) {
+      const imgAt = new Date();
       await sendToThread(api, orgId, conv.zaloAccountId, convInfo.externalThreadId, 0, '', imageProducts.map((p) => p.thumbnail!))
         .catch((err) => logger.warn(`[ai-auto-reply] gửi ảnh sản phẩm lỗi: ${err?.message ?? err}`));
+      markAiImageEchoes(conversationId, imgAt);
     }
   }
   await log(lastPending.id, 'sent', `${staff ? 'nhân viên · ' : ''}${via}${productNote} · ${decision.reason}`, logText, latency, customerText);

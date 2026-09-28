@@ -62,7 +62,9 @@ function prime(opts: { config?: Partial<typeof CONFIG_ROW>; labels?: unknown[]; 
     .mockResolvedValueOnce(opts.lastSelf ?? null) // lastSelf
     .mockResolvedValue({ id: 'm-2', senderType: 'contact' }); // newest (soát lần cuối)
   prismaMock.message.findMany.mockImplementation(async (args: any) =>
-    args.where?.senderType === 'contact' ? [pendingMsg] : [{ senderType: 'contact', content: pendingMsg.content, contentType: 'text', sentAt: pendingMsg.sentAt, sentVia: 'user' }]);
+    args.where?.senderType === 'contact' ? [pendingMsg]
+      : args.where?.senderType === 'self' ? (opts.lastSelf ? [{ senderType: 'self', contentType: 'text', ...opts.lastSelf }] : [])
+      : [{ senderType: 'contact', content: pendingMsg.content, contentType: 'text', sentAt: pendingMsg.sentAt, sentVia: 'user' }]);
   prismaMock.message.create.mockImplementation(async ({ data }: any) => ({ ...data }));
   prismaMock.note.findMany.mockResolvedValue([]);
   prismaMock.aiPlaybookEntry.findMany.mockResolvedValue([
