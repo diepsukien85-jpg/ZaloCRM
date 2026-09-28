@@ -449,7 +449,8 @@ export async function evaluateConversation(
    * (3) báo Telegram chủ shop theo mẫu của skill.
    */
   const handoff = async (reason: string, reply: string | null, urgent: boolean): Promise<EvaluateResult> => {
-    const say = reply?.trim() ? applyGuards(reply, customerText) : null;
+    let say = reply?.trim() ? applyGuards(reply, customerText) : null;
+    if (say && staff && !say.startsWith('🤖')) say = `🤖 ${say}`;
     const live = !test && cfg.mode === 'auto';
     if (say && live) {
       try {
@@ -477,7 +478,8 @@ export async function evaluateConversation(
         botReply: say && live ? say : null,
         dryRun: cfg.mode === 'dry_run',
         kind: staff ? 'staff' : 'customer',
-      }, { chatId: cfg.handoffChatId, pauseMinutes: cfg.handoffPauseMinutes });
+        // Mỗi việc nhân viên xin là 1 việc riêng → luôn báo (khách thì chống báo trùng theo khoảng nghỉ).
+      }, { chatId: cfg.handoffChatId, pauseMinutes: staff ? 0 : cfg.handoffPauseMinutes });
     }
     return { decision: 'handoff', reason, content: say ?? undefined };
   };
