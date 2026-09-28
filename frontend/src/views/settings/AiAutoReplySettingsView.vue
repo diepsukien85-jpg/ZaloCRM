@@ -236,10 +236,10 @@
                   :label="form.classifyContacts ? 'Đang bật' : 'Đang tắt'" />
               </div>
               <p class="aar-hint">
-                AI xét <strong>mọi tin nhắn cá nhân</strong> (không xét nhóm) để xếp người nhắn vào 3 thẻ Zalo
-                <strong>Khách Hàng</strong> / <strong>Nhân Viên</strong> / <strong>Người Thân</strong>.
+                AI xét <strong>mọi tin nhắn cá nhân</strong> (không xét nhóm), tự gắn thẻ <strong>Khách Hàng</strong> hoặc <strong>Người Thân</strong>
+                cho người chưa có thẻ. <strong>Thẻ Nhân Viên anh tự gắn</strong> — AI không tự xếp ai vào nhân viên (thấy giống nhân viên thì báo Telegram để anh gắn).
                 AI trả lời Khách Hàng (tư vấn) và Nhân Viên (giọng anh nhắn nhân viên), <strong>không trả lời Người Thân</strong>.
-                Chưa rõ là ai → chờ vài phút, anh không trả lời thì AI hỏi. Người đã có thẻ khác: AI giữ nguyên thẻ, làm theo nhóm anh xếp bên dưới.
+                Chưa rõ là ai → chờ vài phút, anh không trả lời thì AI hỏi "khách hàng hay người thân". Người đã có thẻ khác: AI giữ nguyên thẻ, làm theo nhóm anh xếp bên dưới.
               </p>
               <template v-if="form.classifyContacts">
                 <div class="d-flex flex-wrap mb-2" style="gap: 6px;">
@@ -251,7 +251,7 @@
                 </div>
                 <v-alert v-if="nickLabels.missing.length" type="warning" variant="tonal" density="compact" class="mb-2">
                   Nick này chưa có thẻ <strong>{{ nickLabels.missing.join(', ') }}</strong>. Mở app Zalo của nick → Phân loại → tạo đúng tên thẻ đó,
-                  rồi bấm "Tải lại thẻ". Chưa đủ 3 thẻ thì AI chưa tự phân loại (người đã có thẻ vẫn được trả lời theo thẻ).
+                  rồi bấm "Tải lại thẻ". Chưa đủ thẻ Khách Hàng + Người Thân thì AI chưa tự phân loại (người đã có thẻ vẫn được trả lời theo thẻ).
                 </v-alert>
 
                 <div v-if="otherLabels.length" class="aar-taggroup-title mt-2">Thẻ khác của nick — xếp vào nhóm nào?</div>
@@ -836,7 +836,7 @@ const form = reactive<Omit<Profile, 'zaloAccountId'>>({
 });
 
 // ── Tự phân loại người nhắn ──
-const DEFAULT_ASK = 'Dạ {toi} chào {ban} ạ. {Toi} là trợ lý AI của {chu}, hiện {chu} đang bận chưa trả lời được. {Ban} là khách hàng, nhân viên hay người thân của {chu} ạ, để {toi} báo lại cho {chu} nha?';
+const DEFAULT_ASK = 'Dạ {toi} chào {ban} ạ. {Toi} là trợ lý AI của {chu}, hiện {chu} đang bận chưa trả lời được. {Ban} là khách hàng hay người thân của {chu} ạ, để {toi} báo lại cho {chu} nha?';
 const nickLabels = ref<{ missing: string[]; labels: Array<{ text: string; count: number; core: string | null }> }>({ missing: [], labels: [] });
 const loadingNickLabels = ref(false);
 const classes = ref<ClassRow[]>([]);

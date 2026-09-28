@@ -52,9 +52,12 @@ async function recentHistory(conversationId: string): Promise<string[]> {
   });
 }
 
-function audienceOf(g: ContactGroup): 'customer' | 'staff' | null {
-  return g === 'customer' || g === 'staff' ? g : null;
+/** AI chỉ tự xếp KHÁCH HÀNG (và người thân để im). Nhân viên do chủ nick tự gắn thẻ Nhân Viên. */
+function audienceOf(g: ContactGroup): 'customer' | null {
+  return g === 'customer' ? g : null;
 }
+
+const STAFF_NOTE = 'Có vẻ là NHÂN VIÊN nhưng chưa có thẻ Nhân Viên — anh gắn thẻ Nhân Viên trên Zalo nếu đúng, AI sẽ trả lời theo kiểu nhân viên';
 
 /**
  * Lượt tin này AI trả lời ai. zaloLabels = thẻ Zalo đang có của người nhắn (null = không đọc được Zalo),
@@ -95,7 +98,7 @@ export async function resolveAudience(p: {
   /** Kết luận nhóm: gắn thẻ Zalo (nếu là 3 nhóm chính) + lưu trạng thái. */
   const settle = async (group: ContactGroup, source: 'ai' | 'answer', confidence: number, reason: string): Promise<AudienceDecision | null> => {
     let labelApplied = false;
-    if (!test && (group === 'customer' || group === 'staff' || group === 'family')) {
+    if (!test && (group === 'customer' || group === 'family')) {
       const res = await applyGroupLabel(orgId, conv.zaloAccountId, conv.externalThreadId, group);
       if (res === 'already_labeled') return { kind: 'stop', reason: 'người nhắn vừa được gắn thẻ, xét lại lượt sau' };
       labelApplied = res === 'applied';
@@ -138,7 +141,11 @@ export async function resolveAudience(p: {
         select: { content: true },
       });
       const res = await classifyAnswer(ai, q?.content ?? 'Anh/chị là khách hàng, nhân viên hay người thân?', p.pendingText);
-      if ((res.group === 'customer' || res.group === 'staff' || res.group === 'family') && res.confidence >= 0.6) {
+      if (res.group === 'staff' && res.confidence >= 0.6) {
+        if (!test) await prisma.aiContactClass.update({ where: { id: row.id }, data: { state: 'unresolved', group: 'staff', reason: res.reason, answeredAt: new Date() } }).catch(() => {});
+        return { kind: 'stop', log: true, reason: `tự nhận là nhân viên (${res.reason})`, notify: STAFF_NOTE };
+      }
+      if ((res.group === 'customer' || res.group === 'family') && res.confidence >= 0.6) {
         const early = await settle(res.group, 'answer', res.confidence, res.reason);
         if (early) return early;
         if (res.group === 'family') {
@@ -172,6 +179,17 @@ export async function resolveAudience(p: {
     history: await recentHistory(conv.id),
     pendingText: p.pendingText,
   });
+  // Giống nhân viên: không gắn thẻ, không hỏi — báo anh tự gắn thẻ Nhân Viên.
+  if (res.group === 'staff' && res.confidence >= MIN_CONFIDENCE) {
+    if (!test) {
+      await prisma.aiContactClass.upsert({
+        where: { conversationId: conv.id },
+        create: { orgId, zaloAccountId: conv.zaloAccountId, conversationId: conv.id, group: 'staff', state: 'unresolved', source: 'ai', confidence: res.confidence, reason: res.reason },
+        update: { group: 'staff', state: 'unresolved', source: 'ai', confidence: res.confidence, reason: res.reason },
+      }).catch(() => {});
+    }
+    return { kind: 'stop', log: true, reason: `AI thấy giống nhân viên (${res.reason})`, notify: STAFF_NOTE };
+  }
   if (res.group !== 'unknown' && res.confidence >= MIN_CONFIDENCE) {
     const early = await settle(res.group, 'ai', res.confidence, res.reason);
     if (early) return early;

@@ -45,10 +45,13 @@ export function coreGroupOfLabel(name: string): 'customer' | 'staff' | 'family' 
   return null;
 }
 
-/** 3 thẻ chính còn thiếu trong danh sách thẻ Zalo của nick. */
+/**
+ * Thẻ cần có để AI tự phân loại: Khách Hàng + Người Thân (AI tự gắn 2 thẻ này).
+ * Thẻ Nhân Viên do chủ nick tự gắn — không bắt buộc để phân loại.
+ */
 export function missingCoreLabels(labelNames: string[]): string[] {
   const have = new Set(labelNames.map(coreGroupOfLabel).filter(Boolean));
-  return (Object.keys(CORE_LABELS) as Array<keyof typeof CORE_LABELS>).filter((g) => !have.has(g)).map((g) => GROUP_LABEL_TEXT[g]);
+  return (['customer', 'family'] as const).filter((g) => !have.has(g)).map((g) => GROUP_LABEL_TEXT[g]);
 }
 
 /**
@@ -84,7 +87,7 @@ export function groupOfTags(
 
 export const DEFAULT_ASK_TEMPLATE =
   'Dạ {toi} chào {ban} ạ. {Toi} là trợ lý AI của {chu}, hiện {chu} đang bận chưa trả lời được. '
-  + '{Ban} là khách hàng, nhân viên hay người thân của {chu} ạ, để {toi} báo lại cho {chu} nha?';
+  + '{Ban} là khách hàng hay người thân của {chu} ạ, để {toi} báo lại cho {chu} nha?';
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 

@@ -54,7 +54,8 @@ describe('hàm thuần', () => {
     expect(C.coreGroupOfLabel('NHÂN VIÊN')).toBe('staff');
     expect(C.coreGroupOfLabel('Người Thân')).toBe('family');
     expect(C.coreGroupOfLabel('Nguồn Hàng')).toBeNull();
-    expect(C.missingCoreLabels(['đã gửi đơn', 'Khách Hàng'])).toEqual(['Nhân Viên', 'Người Thân']);
+    expect(C.missingCoreLabels(['đã gửi đơn', 'Khách Hàng'])).toEqual(['Người Thân']); // Nhân Viên anh tự gắn, không bắt buộc
+    expect(C.missingCoreLabels(['Khách Hàng', 'Người Thân'])).toEqual([]);
   });
 
   it('groupOfTags: thẻ chính / thẻ đã xếp nhóm / thẻ kích hoạt / thẻ Zalo chưa xếp = bỏ qua / Tag CRM lạ không tính', () => {
@@ -69,7 +70,7 @@ describe('hàm thuần', () => {
   it('câu hỏi danh tính gọi đúng giới tính Zalo', () => {
     const q = C.buildAskQuestion(null, { gender: 'female', ownerTitle: 'anh Mẫn', selfPronoun: 'em' });
     expect(q).toContain('Dạ em chào chị ạ');
-    expect(q).toContain('Chị là khách hàng, nhân viên hay người thân của anh Mẫn');
+    expect(q).toContain('Chị là khách hàng hay người thân của anh Mẫn');
     expect(C.buildAskQuestion(null, { gender: 'male', ownerTitle: 'anh Mẫn', selfPronoun: 'em' })).toContain('Anh là khách hàng');
     expect(C.buildAskQuestion('{Ban} ơi, {toi} hỏi xíu', { gender: null, ownerTitle: null, selfPronoun: 'em' })).toBe('Anh/chị ơi, em hỏi xíu');
   });
@@ -103,14 +104,32 @@ describe('resolveAudience', () => {
     expect((r as any).reason).toContain('Khách Hàng');
   });
 
-  it('chưa có thẻ, AI chắc là nhân viên → gắn thẻ Nhân Viên trên Zalo + trả lời kiểu nhân viên', async () => {
-    aiMock.generateText.mockResolvedValue('{"group":"staff","confidence":0.9,"reason":"báo ca làm"}');
-    const r = await F.resolveAudience({ ...base, zaloLabels: [], pendingText: 'anh ơi ca chiều em vào trễ 15p' });
-    expect(r).toMatchObject({ kind: 'reply', audience: 'staff' });
+  it('chưa có thẻ, AI chắc là khách → gắn thẻ Khách Hàng trên Zalo + tư vấn', async () => {
+    aiMock.generateText.mockResolvedValue('{"group":"customer","confidence":0.98,"reason":"hỏi giá"}');
+    const r = await F.resolveAudience({ ...base, zaloLabels: [], pendingText: 'nồi chiên giá sỉ bao nhiêu' });
+    expect(r).toMatchObject({ kind: 'reply', audience: 'customer' });
     const written = zaloApi.updateLabels.mock.calls[0][0];
     expect(written.version).toBe(7);
-    expect(written.labelData.find((l: any) => l.text === 'Nhân Viên').conversations).toEqual(['uid1']);
-    expect(prismaMock.aiContactClass.upsert.mock.calls[0][0].create).toMatchObject({ group: 'staff', state: 'classified', source: 'ai', labelApplied: true });
+    expect(written.labelData.find((l: any) => l.text === 'Khách Hàng').conversations).toEqual(['uid1']);
+    expect(prismaMock.aiContactClass.upsert.mock.calls[0][0].create).toMatchObject({ group: 'customer', state: 'classified', source: 'ai', labelApplied: true });
+  });
+
+  it('AI thấy giống nhân viên → KHÔNG gắn thẻ, không trả lời, báo anh tự gắn thẻ Nhân Viên', async () => {
+    aiMock.generateText.mockResolvedValue('{"group":"staff","confidence":0.98,"reason":"báo ca làm"}');
+    const r = await F.resolveAudience({ ...base, zaloLabels: [], pendingText: 'anh ơi ca chiều em vào trễ 15p' });
+    expect(r).toMatchObject({ kind: 'stop', notify: expect.stringContaining('thẻ Nhân Viên') });
+    expect(zaloApi.updateLabels).not.toHaveBeenCalled();
+  });
+
+  it('đã hỏi, người nhắn nói là nhân viên → không gắn thẻ, báo anh', async () => {
+    prismaMock.aiContactClass.findUnique.mockResolvedValue({ id: 'r1', state: 'asked', group: 'unknown', labelApplied: false, updatedAt: new Date() });
+    const r = await F.resolveAudience({ ...base, zaloLabels: [], pendingText: 'em là nhân viên mới' });
+    expect(r).toMatchObject({ kind: 'stop', notify: expect.stringContaining('thẻ Nhân Viên') });
+    expect(zaloApi.updateLabels).not.toHaveBeenCalled();
+  });
+
+  it('người đã có thẻ Nhân Viên (anh gắn) → AI trả lời kiểu nhân viên', async () => {
+    expect(await F.resolveAudience({ ...base, zaloLabels: ['Nhân Viên'] })).toMatchObject({ kind: 'reply', audience: 'staff' });
   });
 
   it('không gắn đè: người nhắn vừa có thẻ khác trên Zalo → không đổi thẻ', async () => {
@@ -168,7 +187,7 @@ describe('vòng quét hỏi danh tính', () => {
   it('chờ đủ, anh chưa trả lời, chưa có thẻ → gửi câu hỏi gọi "chị"', async () => {
     const d = deps();
     expect(await F.processDueAsks(d, new Date('2026-09-28T03:06:00Z'))).toBe(1);
-    expect(d.send.mock.calls[0][2]).toContain('Chị là khách hàng, nhân viên hay người thân của anh Mẫn');
+    expect(d.send.mock.calls[0][2]).toContain('Chị là khách hàng hay người thân của anh Mẫn');
     expect(prismaMock.aiContactClass.updateMany.mock.calls[0][0].data.state).toBe('asked');
   });
 
