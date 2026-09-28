@@ -181,12 +181,11 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Contact-level filter — gộp vào where.contact nested
     const contactWhere: Record<string, unknown> = {};
-    if (search) {
-      contactWhere.OR = [
-        { fullName: { contains: search, mode: 'insensitive' } },
-        { crmName: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search } },
-      ];
+    // Tìm kiếm: không phân biệt dấu, 1 phần tên, gồm tên nhóm / tên gợi nhớ / SĐT — xem conversation-search.ts.
+    if (search.trim()) {
+      const { searchConversationIds } = await import('./conversation-search.js');
+      const ids = await searchConversationIds(user.orgId, search);
+      where.id = { in: ids.length ? ids : ['__khong_co__'] };
     }
     if (statusId) contactWhere.statusId = statusId;
     if (assignedUserId) contactWhere.assignedUserId = assignedUserId;
