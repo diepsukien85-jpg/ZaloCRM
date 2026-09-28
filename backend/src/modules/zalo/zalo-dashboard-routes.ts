@@ -105,6 +105,7 @@ export async function zaloDashboardRoutes(app: FastifyInstance): Promise<void> {
 
     // msgToday = SUM toàn org cho today (gồm cả sent + received)
     let msgToday = 0;
+    let msgSentToday = 0; // hạn mức gửi chỉ so với tin gửi
     let msgSentByBot = 0;
     let phoneSearchTotal = 0;
     let friendReqSent = 0;
@@ -112,6 +113,7 @@ export async function zaloDashboardRoutes(app: FastifyInstance): Promise<void> {
       const m = metricsToday.get(id);
       if (!m) continue;
       msgToday += m.msgSentTotal + m.msgReceivedTotal;
+      msgSentToday += m.msgSentTotal;
       msgSentByBot += m.msgSentByBot;
       phoneSearchTotal += m.phoneSearchTotal;
       friendReqSent += m.friendReqSent;
@@ -125,6 +127,7 @@ export async function zaloDashboardRoutes(app: FastifyInstance): Promise<void> {
       idle,
       error,
       msgToday,
+      msgSentToday,
       msgSentByBot,
       phoneSearchTotal,
       friendReqSent,
@@ -218,6 +221,9 @@ export async function zaloDashboardRoutes(app: FastifyInstance): Promise<void> {
       const uptime7d = u?.uptimePct ?? 0;
       const todayMetrics: NickDayMetrics | undefined = metricsToday.get(a.id);
       const msgToday = (todayMetrics?.msgSentTotal ?? 0) + (todayMetrics?.msgReceivedTotal ?? 0);
+      // Hạn mức gửi/ngày chỉ so với tin GỬI (trước UI so cả tin nhận → nick nào cũng đỏ "29428/500").
+      const msgSentToday = todayMetrics?.msgSentTotal ?? 0;
+      const msgReceivedToday = todayMetrics?.msgReceivedTotal ?? 0;
       const lastActivity = lastActivityMap.get(a.id) ?? a.lastConnectedAt;
       // Owner's department — FE dùng cho cột Department + filter chip Phòng ban.
       const ownerDept = a.owner?.departmentMember?.department ?? null;
@@ -233,6 +239,8 @@ export async function zaloDashboardRoutes(app: FastifyInstance): Promise<void> {
         hasProxy: !!a.proxyUrl,
         lastConnectedAt: a.lastConnectedAt,
         createdAt: a.createdAt,
+        msgSentToday,
+        msgReceivedToday,
         owner: a.owner ? { id: a.owner.id, fullName: a.owner.fullName, email: a.owner.email } : null,
         ownerUserId: a.ownerUserId,
         ownerDepartment: ownerDept,

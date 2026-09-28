@@ -28,11 +28,11 @@
     <div class="stat-card">
       <div class="lab">Msg today</div>
       <div class="val">
-        {{ formatNum(stats?.msgToday ?? 0) }}<span class="small"> / {{ formatNum(stats?.quota ?? 0) }}</span>
+        {{ formatNum(stats?.msgSentToday ?? stats?.msgToday ?? 0) }}<span class="small"> / {{ formatNum(stats?.quota ?? 0) }} gửi</span>
       </div>
       <div class="bar-row" v-if="stats">
-        <div class="bar"><i :style="{ width: pct(stats.msgToday, stats.quota || 1) + '%' }"></i></div>
-        <span class="bar-pct">{{ pct(stats.msgToday, stats.quota || 1) }}%</span>
+        <div class="bar"><i :style="{ width: pct(stats.msgSentToday ?? stats.msgToday, stats.quota || 1) + '%' }"></i></div>
+        <span class="bar-pct">{{ pct(stats.msgSentToday ?? stats.msgToday, stats.quota || 1) }}%</span>
       </div>
     </div>
 

@@ -93,6 +93,9 @@ export function startDailyStatsAggregator(): void {
     try {
       const empty = first && (await prisma.dailyMessageStat.count()) === 0;
       await aggregateRecentDays(empty ? 30 : 2);
+      // Đếm lại số khách mỗi Tag CRM (trang Tag CRM đọc usageCount, trước đây không ai cập nhật).
+      const { recountTagUsage } = await import('../contacts/crm-tag-routes.js');
+      for (const o of await prisma.organization.findMany({ select: { id: true } })) await recountTagUsage(o.id);
     } catch (err) {
       logger.warn('[daily-stats] tổng hợp lỗi:', err);
     }

@@ -46,8 +46,10 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
           prisma.message.count({
             where: { conversation: { orgId }, sentAt: { gte: today, lt: tomorrow } },
           }),
-          prisma.conversation.count({ where: { orgId, isReplied: false, unreadCount: { gt: 0 } } }),
-          prisma.conversation.count({ where: { orgId, unreadCount: { gt: 0 } } }),
+          // Chỉ chat 1-1 (nhóm Zalo chiếm phần lớn → số trước đây 6.000+, lệch hẳn trang Tin nhắn).
+          // Chưa trả lời = tin cuối là của khách (isReplied=false), khác "chưa đọc" (còn tin chưa mở).
+          prisma.conversation.count({ where: { orgId, threadType: 'user', isReplied: false } }),
+          prisma.conversation.count({ where: { orgId, threadType: 'user', unreadCount: { gt: 0 } } }),
           prisma.appointment.count({
             where: { orgId, appointmentDate: { gte: today, lt: tomorrow }, status: 'scheduled' },
           }),
