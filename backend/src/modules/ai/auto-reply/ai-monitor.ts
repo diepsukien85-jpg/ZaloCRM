@@ -7,7 +7,7 @@
  *   3. Có lượt lỗi (gọi AI lỗi, gửi Zalo lỗi, kiểm duyệt lỗi…).
  *   4. Zalo có tin mới mà AI không nhận được sự kiện (listener chết).
  *   5. Tin khách / nhân viên chờ quá 20 phút chưa ai trả lời (kèm lý do AI chưa trả lời).
- * 21:00 mỗi ngày: báo cáo ngày (tin đến, AI trả lời, chuyển người, hỏi danh tính, bỏ qua theo lý do, lỗi).
+ * Phần AI của báo cáo 21:00 (buildAiDailySection) được gộp vào daily-report.ts cùng chỉ số phản hồi khách.
  * Gửi qua bot Telegram Tiểu Mỹ (HANDOFF_TELEGRAM_*), chống báo trùng theo từng loại.
  */
 import { config } from '../../../config/index.js';
@@ -23,12 +23,10 @@ import { localHour, withinHours } from './guardrails.js';
 
 const TICK_MS = 5 * 60_000;
 const WAIT_ALERT_MIN = 20;
-const REPORT_HOUR = 21;
 const startedAt = Date.now();
 const lastEventByNick = new Map<string, number>();
 const lastAlert = new Map<string, number>();
 const alertedWaits = new Set<string>();
-let lastReportDay = '';
 
 /** Gọi mỗi khi AI nhận được sự kiện tin mới của nick (để biết listener còn sống). */
 export function noteAiEvent(zaloAccountId: string): void {
@@ -112,9 +110,14 @@ async function waitingConversations(nick: Nick, cfg: AutoReplyProfile, now: Date
   return out;
 }
 
-async function dailyReport(nicks: Array<{ nick: Nick; cfg: AutoReplyProfile }>, now: Date, offsetMin: number): Promise<void> {
+/** Phần "AI trả lời Zalo — 24 giờ qua" của báo cáo 21:00 (null nếu tổ chức không có nick bật AI). */
+export async function buildAiDailySection(orgId: string, now = new Date()): Promise<string | null> {
+  const profiles = (await listProfiles(orgId)).filter((p) => p.enabled);
+  if (!profiles.length) return null;
+  const accounts = await prisma.zaloAccount.findMany({ where: { id: { in: profiles.map((p) => p.zaloAccountId) } }, select: { id: true, orgId: true, displayName: true } });
+  const nicks = profiles.map((cfg) => ({ cfg, nick: accounts.find((a) => a.id === cfg.zaloAccountId) })).filter((x): x is { cfg: AutoReplyProfile; nick: Nick } => !!x.nick);
   const since = new Date(now.getTime() - 24 * 3_600_000);
-  const parts: string[] = [`📊 <b>Tiểu Mỹ báo cáo AI trả lời Zalo — 24 giờ qua</b>`];
+  const parts: string[] = [`🤖 <b>AI trả lời Zalo — 24 giờ qua</b>`];
   for (const { nick, cfg } of nicks) {
     const logs = await prisma.aiAutoReplyLog.findMany({
       where: { zaloAccountId: nick.id, createdAt: { gte: since } },
@@ -141,8 +144,8 @@ async function dailyReport(nicks: Array<{ nick: Nick; cfg: AutoReplyProfile }>, 
       `• Lỗi: ${n((l) => l.decision === 'error')}${unanswered ? ` · ⚠️ đang có ${unanswered} tin chờ chưa ai trả lời` : ''}`,
     );
   }
-  parts.push('', `(${hhmm(now, offsetMin)} — muốn xem chi tiết: CRM → Cài đặt → AI tự trả lời → Nhật ký)`);
-  await alert(`report:${now.toISOString().slice(0, 10)}`, 0, parts.join('\n'));
+  parts.push('(chi tiết: CRM → Cài đặt → AI tự trả lời → Nhật ký)');
+  return parts.join('\n');
 }
 
 /** Một vòng canh gác. Trả số tin báo đã gửi (cho test). */
@@ -206,12 +209,6 @@ export async function monitorTick(now = new Date()): Promise<number> {
       }
     }
 
-    // Báo cáo ngày lúc 21:00 (giờ tổ chức)
-    const day = new Date(now.getTime() + offsetMin * 60_000).toISOString().slice(0, 10);
-    if (localHour(now, offsetMin) === REPORT_HOUR && lastReportDay !== `${orgId}:${day}` && nicks.length) {
-      lastReportDay = `${orgId}:${day}`;
-      await dailyReport(nicks, now, offsetMin).then(() => { sent++; }).catch((err) => logger.warn('[ai-monitor] báo cáo ngày lỗi:', err));
-    }
   }
   if (alertedWaits.size > 5000) alertedWaits.clear();
   return sent;
@@ -229,5 +226,4 @@ export function _resetMonitor(): void {
   lastEventByNick.clear();
   lastAlert.clear();
   alertedWaits.clear();
-  lastReportDay = '';
 }

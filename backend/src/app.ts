@@ -387,6 +387,8 @@ async function bootstrap() {
       startAiAutoReply();
       // Bảng daily_message_stats (uptime nick, thời gian phản hồi, hiệu suất nhóm) — trước đây không ai ghi.
       void import('./modules/analytics/daily-stats-aggregator.js').then((mod) => mod.startDailyStatsAggregator());
+      // Tiểu Mỹ báo cáo 21:00: nhân viên phản hồi khách (theo nick) + AI trả lời Zalo.
+      void import('./modules/analytics/daily-report.js').then((mod) => mod.startDailyReport());
       // Phase F — Broadcast scheduler: poll automation_broadcasts scheduled→running
       const { startBroadcastScheduler } = await import('./modules/automation/broadcasts/broadcast-scheduler.js');
       startBroadcastScheduler();

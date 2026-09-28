@@ -52,6 +52,24 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // GET /api/v1/analytics/response-report?days=1|7|30&slow=30&nick= — nhân viên phản hồi khách (theo nick)
+  app.get('/api/v1/analytics/response-report', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { orgId } = request.user!;
+      const q = request.query as QueryParams;
+      const days = Math.min(90, Math.max(1, parseInt(q.days || '1', 10) || 1));
+      const { computeResponseReport, vnDayStart } = await import('./response-report.js');
+      const now = new Date();
+      return await computeResponseReport({
+        orgId, from: vnDayStart(now, days - 1), to: now, now,
+        slowMinutes: Math.min(720, Math.max(1, parseInt(q.slow || '30', 10) || 30)), nickFilter: q.nick || undefined,
+      });
+    } catch (err) {
+      logger.error('[analytics] response report error:', err);
+      return reply.status(500).send({ error: 'Không tính được chỉ số phản hồi' });
+    }
+  });
+
   // GET /api/v1/analytics/response-time?from=&to=
   app.get('/api/v1/analytics/response-time', async (request: FastifyRequest, reply: FastifyReply) => {
     try {

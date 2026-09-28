@@ -89,15 +89,14 @@ describe('Tiểu Mỹ canh gác', () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
-  it('21:00 → báo cáo ngày', async () => {
+  it('phần AI của báo cáo 21:00 (gộp vào báo cáo ngày)', async () => {
     prismaMock.aiAutoReplyLog.findMany.mockResolvedValue([
       { audience: 'customer', decision: 'sent', reason: 'x' }, { audience: 'customer', decision: 'skipped', reason: 'nhân viên vừa trả lời' },
     ]);
     prismaMock.conversation.count.mockResolvedValue(7);
-    // lỗi giả không tính: findMany lỗi cũng trả mảng trên — chỉ kiểm báo cáo có mặt
-    await M.monitorTick(new Date('2026-09-28T14:02:00Z')); // 21:02 VN
-    const all = sendTelegram.mock.calls.map((c) => c[1]).join('\n');
-    expect(all).toContain('báo cáo AI trả lời Zalo');
-    expect(all).toContain('Người nhắn riêng: 7');
+    const txt = await M.buildAiDailySection('o', new Date('2026-09-28T14:02:00Z'));
+    expect(txt).toContain('AI trả lời Zalo — 24 giờ qua');
+    expect(txt).toContain('Người nhắn riêng: 7');
+    expect(txt).toContain('AI trả lời khách: 1');
   });
 });
