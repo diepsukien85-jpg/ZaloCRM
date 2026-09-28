@@ -45,13 +45,14 @@ export async function searchConversationIds(orgId: string, q: string, limit = 10
      WHERE cv.org_id = ${orgId} AND ((${nameCond}) ${phoneCond})
      ORDER BY cv.last_message_at DESC NULLS LAST
      LIMIT ${limit}`;
-  // Nội dung: mọi từ khoá cùng nằm trong 1 tin (từ ≥ 2 ký tự để index trigram dùng được).
-  const contentTokens = tokens.filter((t) => t.length >= 2);
-  const byContent = contentTokens.length
+  // Nội dung: cả CỤM từ khoá đúng thứ tự trong 1 tin (vd "nguyen tien" — không lấy tin có "nguyễn" … "tiền" rời rạc),
+  // tối thiểu 3 ký tự để index trigram dùng được.
+  const phrase = tokens.join(' ');
+  const byContent = phrase.length >= 3
     ? prisma.$queryRaw<Array<{ id: string }>>`
         SELECT s.conversation_id AS id
           FROM dm_message_search s JOIN conversations cv ON cv.id = s.conversation_id
-         WHERE cv.org_id = ${orgId} AND ${Prisma.join(contentTokens.map((t) => Prisma.sql`s.folded LIKE ${'%' + t + '%'}`), ' AND ')}
+         WHERE cv.org_id = ${orgId} AND s.folded LIKE ${'%' + phrase + '%'}
          GROUP BY s.conversation_id
          ORDER BY max(s.sent_at) DESC
          LIMIT 300`.catch(() => [] as Array<{ id: string }>) // bảng phụ chưa có (chưa chạy migration) → bỏ qua
