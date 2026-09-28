@@ -29,7 +29,10 @@ export type CatalogProduct = {
   thumbnail: string | null;
   /** Chỉ khớp một phần câu khách hỏi (kho không có đúng món) — AI phải nói rõ. */
   approx: boolean;
+  /** Quy cách đóng gói khác của cùng món (vd "Set 2 Túi", "Thùng 8 Túi") với giá riêng từng bảng giá. */
+  packs?: CatalogPack[];
 };
+export type CatalogPack = { name: string; ratio: number; priceRetail: number | null; priceCtv: number | null; priceNpp: number | null };
 
 export type ProductQuery = { name: string; hints?: string[] };
 
@@ -148,6 +151,43 @@ export async function searchProducts(queries: ProductQuery[], limit = 10): Promi
         [ids, bookIds],
       )
     : { rows: [] as Array<{ product_id: number; price_book_id: number; price: string }> };
+  // Quy cách đóng gói (set / thùng…): bảng product_unit_conversions + giá theo từng bảng giá.
+  // Quyền đọc thiếu / lỗi → bỏ qua, vẫn trả giá đơn vị gốc.
+  const packsOf = new Map<number, CatalogPack[]>();
+  try {
+    const { rows: units } = await db.query<{ id: number; product_id: number; unit_name: string; conversion_ratio: string; sell_price: string }>(
+      `SELECT id, product_id, unit_name, conversion_ratio, sell_price FROM ${schema}.product_unit_conversions
+        WHERE product_id = ANY($1::bigint[]) AND COALESCE(is_base, false) = false AND COALESCE(is_direct_sell, true) = true
+        ORDER BY product_id, sort_order, id`,
+      [ids],
+    );
+    const { rows: unitPrices } = units.length && bookIds.length
+      ? await db.query<{ unit_conversion_id: number; price_book_id: number; price: string }>(
+          `SELECT unit_conversion_id, price_book_id, price FROM ${schema}.product_prices
+            WHERE unit_conversion_id = ANY($1::bigint[]) AND price_book_id = ANY($2::bigint[])`,
+          [units.map((u) => u.id), bookIds],
+        )
+      : { rows: [] as Array<{ unit_conversion_id: number; price_book_id: number; price: string }> };
+    const up = (uid: number, book: number | undefined | null) => {
+      if (!book) return null;
+      const v = Number(unitPrices.find((p) => Number(p.unit_conversion_id) === Number(uid) && Number(p.price_book_id) === book)?.price);
+      return Number.isFinite(v) && v > 0 ? v : null;
+    };
+    for (const u of units) {
+      const list = packsOf.get(Number(u.product_id)) ?? [];
+      list.push({
+        name: String(u.unit_name || '').trim(),
+        ratio: Number(u.conversion_ratio) || 1,
+        priceRetail: up(u.id, t.retailId) ?? (Number(u.sell_price) > 0 ? Number(u.sell_price) : null),
+        priceCtv: up(u.id, t.ctv?.id),
+        priceNpp: up(u.id, t.npp?.id),
+      });
+      packsOf.set(Number(u.product_id), list.slice(0, 4));
+    }
+  } catch (err: any) {
+    logger.debug(`[ai-catalog] không đọc được quy cách đóng gói: ${err?.message ?? err}`);
+  }
+
   const priceOf = (pid: number, book: number | undefined | null) => {
     if (!book) return null;
     const hit = prices.find((p) => Number(p.product_id) === pid && Number(p.price_book_id) === book);
@@ -175,6 +215,7 @@ export async function searchProducts(queries: ProductQuery[], limit = 10): Promi
       description: clip(String(r.description || '').replace(/[#*_`>]/g, ''), 400),
       thumbnail: typeof r.thumbnail === 'string' && /^https:\/\//.test(r.thumbnail) ? r.thumbnail : null,
       approx: !!r.approx,
+      packs: (packsOf.get(id) ?? []).filter((pk) => pk.name && pk.priceRetail),
     };
   });
 }
@@ -192,6 +233,9 @@ export function renderProducts(products: CatalogProduct[]): string {
     ].filter(Boolean).join(' · ');
     return [
       `- [id ${p.id}] ${p.name} (mã ${p.code}) — ${prices} — còn hàng${p.stock <= 3 ? ` (ít, ${p.stock} ${p.unit})` : ''}${p.approx ? ' — GẦN ĐÚNG: kho không có đúng món khách hỏi, chỉ là món liên quan' : ''}`,
+      p.packs?.length
+        ? `  Quy cách khác (giá cho cả set / thùng, không phải 1 ${p.unit}): ${p.packs.map((pk) => `${pk.name} (= ${pk.ratio} ${p.unit}): lẻ ${vnd(pk.priceRetail!)}${pk.priceCtv ? ` · CTV ${vnd(pk.priceCtv)}` : ''}${pk.priceNpp ? ` · NPP ${vnd(pk.priceNpp)}` : ''}`).join('; ')}`
+        : null,
       p.onSale ? `  KHUYẾN MÃI: ${p.saleNote || 'đang khuyến mãi'}` : null,
       p.description ? `  Mô tả: ${p.description}` : null,
       p.thumbnail ? '  (có ảnh)' : null,

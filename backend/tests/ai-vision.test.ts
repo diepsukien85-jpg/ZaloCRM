@@ -184,3 +184,17 @@ describe('chặn lấy nhầm giá biến thể', () => {
     expect(focusPriceSource(products, [])).toBeNull();
   });
 });
+
+describe('giá theo quy cách đóng gói (set / thùng)', () => {
+  it('giá thùng / set là giá đúng — kiểm duyệt không coi là sai; khối kho có dòng quy cách', async () => {
+    const { focusPriceSource, unsupportedAmounts } = await import('../src/modules/ai/auto-reply/auto-reply-service.js');
+    const { renderProducts } = await import('../src/modules/ai/auto-reply/catalog-service.js');
+    const p = { id: 1, code: 'SP1', name: 'Nước Giặt Xả Minmy', unit: 'Túi', stock: 500, priceRetail: 66000, priceCtv: 66000, priceNpp: 66000,
+      ctvMinQty: 10, nppMinQty: 20, onSale: false, saleNote: null, description: '', thumbnail: null, approx: false,
+      packs: [{ name: 'Set 2 Túi', ratio: 2, priceRetail: 129000, priceCtv: 116000, priceNpp: 114000 }, { name: 'Thùng 8 Túi', ratio: 8, priceRetail: 450000, priceCtv: 450000, priceNpp: 450000 }] };
+    const src = focusPriceSource([p], [1])!;
+    expect(unsupportedAmounts('Thùng 8 túi giá 450.000đ, set 2 túi giá CTV 116.000đ', src)).toEqual([]);
+    expect(unsupportedAmounts('thùng 8 túi 420.000đ', src)).toEqual([420000]);
+    expect(renderProducts([p])).toContain('Thùng 8 Túi (= 8 Túi): lẻ 450.000đ');
+  });
+});

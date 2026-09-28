@@ -207,10 +207,14 @@ export function isRealGroundingIssue(sentence: string, sources: string): boolean
  * Nguồn giá của đúng các món AI chọn gửi ảnh (tin đang tư vấn chính các món đó) —
  * chặn lấy nhầm giá biến thể khác (vd giá 25ml cho chai 20ml). Hàm thuần.
  */
-export function focusPriceSource(products: Array<{ id: number; name: string; priceRetail: number | null; priceCtv: number | null; priceNpp: number | null }>, ids: number[]): string | null {
+export function focusPriceSource(products: Array<{ id: number; name: string; priceRetail: number | null; priceCtv: number | null; priceNpp: number | null; packs?: Array<{ name: string; priceRetail: number | null; priceCtv: number | null; priceNpp: number | null }> }>, ids: number[]): string | null {
   const focus = products.filter((p) => ids.includes(p.id));
   if (!focus.length) return null;
-  return focus.map((p) => `${p.name}: giá lẻ ${p.priceRetail ?? '?'}đ · CTV ${p.priceCtv ?? '?'}đ · NPP ${p.priceNpp ?? '?'}đ`).join('\n');
+  return focus.map((p) => [
+    `${p.name}: giá lẻ ${p.priceRetail ?? '?'}đ · CTV ${p.priceCtv ?? '?'}đ · NPP ${p.priceNpp ?? '?'}đ`,
+    // Giá theo quy cách (set / thùng) cũng là giá đúng của món này.
+    ...(p.packs ?? []).map((pk) => `${p.name} — ${pk.name}: giá lẻ ${pk.priceRetail ?? '?'}đ · CTV ${pk.priceCtv ?? '?'}đ · NPP ${pk.priceNpp ?? '?'}đ`),
+  ].join('\n')).join('\n');
 }
 
 async function verifyGrounding(p: { provider: string; apiKey: string; model: string; reply: string; sources: string; moneySources?: string | null }): Promise<{ ok: boolean; text: string } | null> {
