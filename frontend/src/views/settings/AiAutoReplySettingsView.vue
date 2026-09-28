@@ -331,7 +331,11 @@
                   </v-chip>
                 </v-chip-group>
               </template>
-              <v-alert :type="form.triggerTags.length ? 'success' : 'warning'" variant="tonal" density="compact" class="mt-2">
+              <v-alert v-if="form.classifyContacts" type="info" variant="tonal" density="compact" class="mt-2">
+                Đang bật <strong>Tự phân loại</strong>: AI trả lời theo thẻ Khách Hàng / Nhân Viên và nhóm anh xếp ở trên — không cần chọn thẻ kích hoạt.
+                <template v-if="form.triggerTags.length"> Thẻ chọn thêm ở đây ({{ form.triggerTags.map(cleanTag).join(', ') }}) cũng được tính là Khách Hàng.</template>
+              </v-alert>
+              <v-alert v-else :type="form.triggerTags.length ? 'success' : 'warning'" variant="tonal" density="compact" class="mt-2">
                 <template v-if="form.triggerTags.length">
                   AI sẽ trả lời khách của nick này đang mang thẻ: <strong>{{ form.triggerTags.map(cleanTag).join(', ') }}</strong>
                   (hiện khoảng <strong>{{ selectedCount }}</strong> khách).
