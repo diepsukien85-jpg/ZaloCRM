@@ -47,6 +47,7 @@ async function alert(key: string, throttleMs: number, html: string, chatId?: str
   try {
     await sendTelegram(chat, html);
     lastAlert.set(key, now);
+    logger.info(`[ai-monitor] đã báo Telegram (${key.split(':')[0]}): ${html.replace(/<[^>]+>/g, '').split('\n')[0].slice(0, 120)}`);
     return true;
   } catch (err: any) {
     logger.warn(`[ai-monitor] gửi Telegram lỗi: ${err?.message ?? err}`);
