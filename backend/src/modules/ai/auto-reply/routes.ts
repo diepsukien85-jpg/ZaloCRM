@@ -165,7 +165,11 @@ export async function aiAutoReplyRoutes(app: FastifyInstance): Promise<void> {
     return {
       live: !!live,
       missing: missingCoreLabels(labels.map((l) => l.text)),
-      labels: labels.filter((l) => l.text).map((l) => ({ text: l.text, count: l.conversations.length, core: coreGroupOfLabel(l.text) })),
+      // count = người (chat riêng, AI xử lý); groups = nhóm Zalo (id "g…", AI không trả lời trong nhóm).
+      labels: labels.filter((l) => l.text).map((l) => {
+        const groups = l.conversations.filter((t) => t.startsWith('g')).length;
+        return { text: l.text, count: l.conversations.length - groups, groups, core: coreGroupOfLabel(l.text) };
+      }),
     };
   });
 

@@ -257,7 +257,7 @@
                 <div v-if="otherLabels.length" class="aar-taggroup-title mt-2">Thẻ khác của nick — xếp vào nhóm nào?</div>
                 <p v-if="otherLabels.length" class="aar-hint">Thẻ chưa xếp = <strong>Không trả lời</strong> (vd "Nguồn Hàng", "Thể Thao"). Thẻ công việc với khách (vd "Đơn ngày mai") nên xếp vào Khách Hàng.</p>
                 <div v-for="l in otherLabels" :key="l.text" class="aar-labelmap">
-                  <span class="aar-labelmap-name">{{ l.text }} <span class="aar-count">{{ l.count }} người</span></span>
+                  <span class="aar-labelmap-name">{{ l.text }} <span class="aar-count">{{ labelCountText(l) }}</span></span>
                   <v-btn-toggle :model-value="form.labelGroups[l.text] || 'ignore'" mandatory density="compact" variant="outlined" divided color="teal"
                     @update:model-value="(v: LabelGroup) => setLabelGroup(l.text, v)">
                     <v-btn value="customer" size="x-small">Khách Hàng</v-btn>
@@ -837,7 +837,11 @@ const form = reactive<Omit<Profile, 'zaloAccountId'>>({
 
 // ── Tự phân loại người nhắn ──
 const DEFAULT_ASK = 'Dạ {toi} chào {ban} ạ. {Toi} là trợ lý AI của {chu}, hiện {chu} đang bận chưa trả lời được. {Ban} là khách hàng hay người thân của {chu} ạ, để {toi} báo lại cho {chu} nha?';
-const nickLabels = ref<{ missing: string[]; labels: Array<{ text: string; count: number; core: string | null }> }>({ missing: [], labels: [] });
+const nickLabels = ref<{ missing: string[]; labels: Array<{ text: string; count: number; groups?: number; core: string | null }> }>({ missing: [], labels: [] });
+/** "3 người · 80 nhóm" — AI chỉ trả lời chat riêng, nhóm Zalo không tính. */
+function labelCountText(l: { count: number; groups?: number }) {
+  return [`${l.count} người`, l.groups ? `${l.groups} nhóm (AI không trả lời nhóm)` : ''].filter(Boolean).join(' · ');
+}
 const loadingNickLabels = ref(false);
 const classes = ref<ClassRow[]>([]);
 const showClasses = ref(false);
