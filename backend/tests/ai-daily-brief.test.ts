@@ -2,7 +2,7 @@
  * ai-daily-brief.test.ts — popup "Hỏi AI về khách hôm nay".
  * Mock prisma + AI provider; kiểm tra snapshot, scope theo role, quota, prompt guard.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { mockUser } from './test-helpers.js';
 
@@ -226,6 +226,10 @@ describe('routes', () => {
   });
 
   it('POST ask: 400 khi thiếu câu hỏi, 200 khi OK, 429 khi hết quota, 400 khi AI tắt', async () => {
+    // Route lấy "hôm nay" theo đồng hồ thật → cố định đồng hồ về NOW (08/09) cho khớp dữ liệu mẫu.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    onTestFinished(() => { vi.useRealTimers(); });
     const app = buildApp();
     let res = await app.inject({ method: 'POST', url: '/api/v1/ai/daily-brief/ask', payload: {} });
     expect(res.statusCode).toBe(400);
