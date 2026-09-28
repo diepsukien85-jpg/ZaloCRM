@@ -4,16 +4,16 @@
  * Telegram nhiều tin dễ sót; thẻ Zalo là "hộp việc" anh mở ra xem trên app Zalo / CRM bất cứ lúc nào.
  *   - AI chuyển người (khách hoặc nhân viên) → dời hội thoại sang thẻ "Chờ người thật", NHỚ thẻ cũ
  *     (Zalo chỉ cho 1 thẻ / người) — AI im khi hội thoại mang thẻ này.
- *   - Người thật (anh / nhân viên, không phải AI) nhắn trả lời trong hội thoại → vòng quét trả lại thẻ cũ
- *     (không có thẻ cũ → gỡ thẻ) → AI làm việc lại.
- *   - Anh tự đổi thẻ khỏi "Chờ người thật" → tôn trọng, chỉ đóng phiếu giữ.
+ *   - Hội thoại NẰM YÊN ở thẻ này cho tới khi ANH tự đổi thẻ (Sếp chọn 28/09/2026 — tự trả thẻ khi có tin
+ *     "người thật" dễ sai: tin do máy gửi qua API/chào hàng cũng ghi như tin gõ tay, và trả lời 1 câu là rời thẻ, dễ quên việc).
+ *   - Anh đổi thẻ khác → AI làm việc lại theo thẻ mới; vòng quét chỉ đóng phiếu giữ (ghi thẻ anh đã chọn).
  * Nick chưa tạo thẻ "Chờ người thật" → bỏ qua (vẫn báo Telegram như cũ).
  */
 import { prisma } from '../../../shared/database/prisma-client.js';
 import { logger } from '../../../shared/utils/logger.js';
 import { zaloOps } from '../../../shared/zalo-operations.js';
 import { zaloPool } from '../../zalo/zalo-pool.js';
-import { _dropNickLabelCache, coreGroupOfLabel, GROUP_LABEL_TEXT } from './contact-classifier.js';
+import { _dropNickLabelCache, coreGroupOfLabel, GROUP_LABEL_TEXT, threadZaloLabels } from './contact-classifier.js';
 import { normalizeTagName } from './guardrails.js';
 
 type SdkLabel = { id?: number | string; text?: string; conversations?: unknown[] } & Record<string, unknown>;
@@ -78,35 +78,16 @@ export async function holdForHuman(p: { orgId: string; zaloAccountId: string; co
   return true;
 }
 
-/** Hàm thuần: có tin NGƯỜI THẬT trả lời sau lúc giữ không (bỏ tin AI + ảnh AI gửi kèm ≤30s sau tin AI). */
-export function humanRepliedAfter(
-  heldAt: Date,
-  selfMessages: Array<{ sentAt: Date; sentVia: string | null; contentType: string | null }>,
-): boolean {
-  const auto = selfMessages.filter((m) => m.sentVia === 'automation').map((m) => m.sentAt.getTime());
-  return selfMessages.some((m) => m.sentAt > heldAt && m.sentVia !== 'automation'
-    && !(m.contentType !== 'text' && m.contentType !== 'rich' && auto.some((a) => a <= m.sentAt.getTime() && m.sentAt.getTime() - a < 30_000)));
-}
-
-/** Vòng quét: người thật đã trả lời → trả lại thẻ cũ. Trả số phiếu đã đóng. */
+/** Vòng quét: hội thoại anh đã tự đổi khỏi thẻ "Chờ người thật" → đóng phiếu giữ. KHÔNG tự dời thẻ. */
 export async function releaseHolds(): Promise<number> {
-  const holds = await prisma.aiHandoffHold.findMany({ where: { releasedAt: null }, orderBy: { heldAt: 'asc' }, take: 50 });
+  const holds = await prisma.aiHandoffHold.findMany({ where: { releasedAt: null }, orderBy: { heldAt: 'asc' }, take: 100 });
   let closed = 0;
   for (const h of holds) {
     try {
-      const self = await prisma.message.findMany({
-        where: { conversationId: h.conversationId, senderType: 'self', isDeleted: false, sentAt: { gt: new Date(h.heldAt.getTime() - 60_000) } },
-        orderBy: { sentAt: 'asc' },
-        take: 30,
-        select: { sentAt: true, sentVia: true, contentType: true },
-      });
-      if (!humanRepliedAfter(h.heldAt, self)) continue;
-      const res = await moveThreadLabel(h.orgId, h.zaloAccountId, h.threadId, h.prevLabel, { onlyIfCurrent: GROUP_LABEL_TEXT.waiting });
-      if (res.status === 'error') continue; // nick mất kết nối → thử lại vòng sau
-      const note = res.status === 'moved' ? `người thật đã trả lời → trả thẻ ${h.prevLabel ? `"${h.prevLabel}"` : '(không thẻ)'}`
-        : res.status === 'not_current' ? `anh đã tự đổi thẻ (${res.prev ?? 'không thẻ'})`
-        : res.status === 'missing_label' ? `thẻ cũ "${h.prevLabel}" không còn → giữ nguyên` : 'đã đúng thẻ';
-      if (res.status === 'missing_label') await moveThreadLabel(h.orgId, h.zaloAccountId, h.threadId, null, { onlyIfCurrent: GROUP_LABEL_TEXT.waiting });
+      const labels = await threadZaloLabels(h.zaloAccountId, h.threadId);
+      if (labels === null) continue; // nick mất kết nối → vòng sau
+      if (labels.some((l) => coreGroupOfLabel(l) === 'waiting')) continue; // vẫn chờ anh xử lý
+      const note = `anh đã đổi thẻ → ${labels.length ? labels.map((l) => `"${l}"`).join(', ') : '(không thẻ)'}`;
       await prisma.aiHandoffHold.update({ where: { id: h.id }, data: { releasedAt: new Date(), releaseNote: note } });
       logger.info(`[ai-hold] đóng phiếu conv=${h.conversationId}: ${note}`);
       closed++;

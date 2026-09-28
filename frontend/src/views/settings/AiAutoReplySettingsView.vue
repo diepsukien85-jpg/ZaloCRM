@@ -241,7 +241,8 @@
                 AI trả lời Khách Hàng (tư vấn) và Nhân Viên (giọng anh nhắn nhân viên), <strong>không trả lời Người Thân</strong>.
                 Chưa rõ là ai → chờ vài phút, anh không trả lời thì AI hỏi "khách hàng hay người thân". Người đã có thẻ khác: AI giữ nguyên thẻ, làm theo nhóm anh xếp bên dưới.
                 <br>Tin AI <strong>chuyển cho người thật</strong> (khách khiếu nại, cần anh quyết, chưa rõ là ai…) được dời vào thẻ <strong>Chờ người thật</strong> —
-                anh mở thẻ này trên Zalo để xử lý; anh / nhân viên trả lời xong thì thẻ cũ tự trả lại và AI làm việc tiếp.
+                anh mở thẻ này trên Zalo để xử lý. Tin <strong>nằm yên ở thẻ này cho tới khi anh tự đổi thẻ</strong> (vd về Khách Hàng) —
+                lúc đó AI mới làm việc lại với người đó.
               </p>
               <template v-if="form.classifyContacts">
                 <div class="d-flex flex-wrap mb-2" style="gap: 6px;">

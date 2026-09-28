@@ -58,7 +58,7 @@ export type HandoffInfo = {
 /** Hàm thuần: soạn tin Telegram theo mẫu của skill. */
 export function formatHandoff(h: HandoffInfo, appUrl = config.appUrl): string {
   const link = `${appUrl.replace(/\/$/, '')}/chat/${h.conversationId}`;
-  const heldLine = h.held ? '📌 Đã chuyển vào thẻ Zalo "Chờ người thật" — trả lời khách xong, thẻ cũ tự trả lại.' : null;
+  const heldLine = h.held ? '📌 Đã chuyển vào thẻ Zalo "Chờ người thật" — xử lý xong anh đổi thẻ (vd về Khách Hàng) thì AI làm việc lại.' : null;
   if (h.kind === 'staff' || h.kind === 'identity') {
     const staff = h.kind === 'staff';
     return [
