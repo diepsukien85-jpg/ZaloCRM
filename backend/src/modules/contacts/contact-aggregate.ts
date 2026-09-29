@@ -221,7 +221,7 @@ export async function applyContactInteraction(args: InteractionInput): Promise<v
  *   - totalInbound/totalOutbound: increment
  *   - firstMessageAt: set if null
  */
-export async function applyFriendAggregate(args: AggregateMessageInput): Promise<void> {
+export async function applyFriendAggregate(args: AggregateMessageInput, _retry = 0): Promise<void> {
   try {
     const conv = await prisma.conversation.findUnique({
       where: { id: args.conversationId },
@@ -407,6 +407,14 @@ export async function applyFriendAggregate(args: AggregateMessageInput): Promise
       }
     }
   } catch (err) {
+    // 18/09/2026: ĐUA TẠO FRIEND — 2 tin của cùng khách đến gần như cùng lúc (burst / sync), cả 2 thấy
+    // "chưa có Friend" rồi cùng create → tin thứ 2 đụng UNIQUE (zalo_account_id, zalo_uid_in_nick) = P2002,
+    // và MẤT cộng dồn của tin đó (6 lần/giờ trong log). Trong Postgres không catch được bên trong transaction
+    // (transaction đã abort), nên thử lại CẢ hàm 1 lần: lần 2 findUnique thấy row → đi nhánh update.
+    const code = (err as { code?: string })?.code;
+    if (code === 'P2002' && _retry < 1) {
+      return applyFriendAggregate(args, _retry + 1);
+    }
     logger.warn(`[friend-aggregate] apply failed conv=${args.conversationId}:`, err);
   }
 }

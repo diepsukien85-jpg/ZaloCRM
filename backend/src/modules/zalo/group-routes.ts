@@ -5,6 +5,7 @@
 import type { FastifyInstance } from 'fastify';
 import { authMiddleware } from '../auth/auth-middleware.js';
 import { zaloOps } from '../../shared/zalo-operations.js';
+import { prisma } from '../../shared/database/prisma-client.js';
 import { resolveAccount, checkAccess, handleError } from './zalo-route-helpers.js';
 
 export async function groupRoutes(app: FastifyInstance) {
@@ -19,7 +20,25 @@ export async function groupRoutes(app: FastifyInstance) {
     try {
       await resolveAccount(accountId, request.user!.orgId);
       if (!(await checkAccess(request, reply, accountId, 'read'))) return;
-      return { groups: await zaloOps.getAllGroups(accountId) };
+      // SDK getAllGroups trả { version, gridVerMap: { <groupId>: ver } } — không có tên. Trả MẢNG cho trang
+      // Nhóm Zalo: id từ Zalo + tên / số thành viên / ảnh từ hội thoại nhóm đã lưu (trước đây trang luôn trống).
+      const raw = await zaloOps.getAllGroups(accountId) as { gridVerMap?: Record<string, unknown> } | null;
+      const ids = Object.keys(raw?.gridVerMap ?? {});
+      const convs = ids.length
+        ? await prisma.conversation.findMany({
+            where: { zaloAccountId: accountId, threadType: 'group', externalThreadId: { in: ids } },
+            select: { id: true, externalThreadId: true, groupName: true, groupMembersCount: true, groupAvatarUrl: true, lastMessageAt: true },
+          })
+        : [];
+      const byId = new Map(convs.map((c) => [c.externalThreadId, c]));
+      const groups = ids.map((id) => {
+        const c = byId.get(id);
+        return {
+          id, groupId: id, name: c?.groupName ?? null, totalMember: c?.groupMembersCount ?? null,
+          avt: c?.groupAvatarUrl ?? null, conversationId: c?.id ?? null, lastMessageAt: c?.lastMessageAt ?? null,
+        };
+      }).sort((x, y) => (y.lastMessageAt?.getTime() ?? 0) - (x.lastMessageAt?.getTime() ?? 0));
+      return { groups };
     } catch (err) { return handleError(reply, err, 'getAllGroups'); }
   });
 

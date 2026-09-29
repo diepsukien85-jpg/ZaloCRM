@@ -42,6 +42,8 @@ export interface EnrichedAccount {
   crew: CrewMember[];
   crewCount: number;
   msgToday: number;
+  /** Tin GỬI hôm nay — so với hạn mức gửi (msgToday gồm cả tin nhận). */
+  msgSentToday?: number;
   metricsToday: NickMetricsToday | null;
   quota: number;
   uptime7d: number;
@@ -55,6 +57,8 @@ export interface TeamStats {
   idle: number;
   error: number;
   msgToday: number;
+  /** Tin GỬI hôm nay — so với hạn mức gửi (msgToday gồm cả tin nhận). */
+  msgSentToday?: number;
   // Phase metrics layer 2026-05-22 — breakdown org-wide today
   msgSentByBot: number;
   phoneSearchTotal: number;

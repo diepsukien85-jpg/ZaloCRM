@@ -32,7 +32,7 @@
         <div class="stats-trio">
           <div class="it">
             <div class="lbl">Msg hôm nay</div>
-            <div class="v">{{ account.msgToday }}<small> / {{ account.quota }}</small></div>
+            <div class="v">{{ account.msgSentToday ?? account.msgToday }}<small> / {{ account.quota }} gửi</small></div>
           </div>
           <div class="it">
             <div class="lbl">Uptime 7d</div>

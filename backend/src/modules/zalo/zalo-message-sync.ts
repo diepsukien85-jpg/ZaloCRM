@@ -17,6 +17,34 @@ const MESSAGES_PER_GROUP = 50;
 // Track active sync intervals per account
 const syncIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
+// Zalo gỡ endpoint lịch sử nhóm (/api/group/history) → HTTP 404 cho MỌI nhóm (22-28/09/2026: ~188k WARN,
+// 0 tin bù được). Gặp 404: tạm ngừng gọi cho nick đó 6 giờ, chỉ warn 1 lần, trả lịch sử rỗng.
+const GROUP_HISTORY_404_BACKOFF_MS = 6 * 60 * 60 * 1000;
+const groupHistoryOffUntil = new Map<string, number>();
+
+function is404(err: unknown): boolean {
+  return /status code 404/.test(String((err as { message?: string })?.message ?? err ?? ''));
+}
+
+/** Lịch sử 1 nhóm; Zalo trả 404 (endpoint đã gỡ) → [] và tạm ngừng cho nick. Lỗi khác ném ra như cũ. */
+export async function fetchGroupHistory(api: any, accountId: string, groupId: string, count: number): Promise<any[]> {
+  if ((groupHistoryOffUntil.get(accountId) ?? 0) > Date.now()) return [];
+  try {
+    const history = await api.getGroupChatHistory(groupId, count);
+    return history?.groupMsgs || history?.data?.groupMsgs || [];
+  } catch (err) {
+    if (!is404(err)) throw err;
+    groupHistoryOffUntil.set(accountId, Date.now() + GROUP_HISTORY_404_BACKOFF_MS);
+    logger.warn(`[sync:${accountId}] Zalo trả 404 cho lịch sử nhóm (endpoint đã gỡ) — tạm ngừng đồng bộ bù tin nhóm 6 giờ`);
+    return [];
+  }
+}
+
+/** Chỉ cho test. */
+export function _resetGroupHistoryBackoff(): void {
+  groupHistoryOffUntil.clear();
+}
+
 /**
  * Sync recent group messages for one account.
  * Returns the number of newly inserted messages.
@@ -39,9 +67,9 @@ async function syncGroupMessages(api: any, accountId: string): Promise<number> {
   let synced = 0;
 
   for (const conv of groupConvs) {
+    if ((groupHistoryOffUntil.get(accountId) ?? 0) > Date.now()) break;
     try {
-      const history = await api.getGroupChatHistory(conv.externalThreadId, MESSAGES_PER_GROUP);
-      const messages = history?.groupMsgs || history?.data?.groupMsgs || [];
+      const messages = await fetchGroupHistory(api, accountId, conv.externalThreadId!, MESSAGES_PER_GROUP);
 
       // Collect all msgIds for batch dedup check
       const msgIdMap = new Map<string, any>();

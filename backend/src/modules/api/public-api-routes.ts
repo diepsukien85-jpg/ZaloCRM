@@ -11,6 +11,7 @@ import path from 'node:path';
 import { prisma } from '../../shared/database/prisma-client.js';
 import { assertSafeOutboundUrl, SsrfBlockedError } from '../../shared/utils/ssrf-guard.js';
 import { logger } from '../../shared/utils/logger.js';
+import { isGroupIgnored, countIgnoredSelfImageEchoes } from '../chat/ignored-groups-service.js';
 
 // Public API image-send limits. Ảnh tải từ URL (HTTPS only — qua ssrf-guard).
 const PUBLIC_IMAGE_MAX = 25 * 1024 * 1024; // 25MB/ảnh
@@ -108,10 +109,25 @@ async function countSelfImagesSince(
     where: { orgId, zaloAccountId, externalThreadId: threadId, threadType: threadType === 1 ? 'group' : 'user' },
     select: { id: true },
   });
+  // Nhóm bị bỏ qua không lưu echo vào DB → đếm echo ảnh trong bộ nhớ thay thế.
+  if (threadType === 1 && isGroupIgnored(orgId, threadId)) {
+    return countIgnoredSelfImageEchoes(zaloAccountId, threadId, since);
+  }
   if (!conv) return -1;
   return prisma.message.count({
     where: { conversationId: conv.id, contentType: 'image', senderType: 'self', sentAt: { gte: since } },
   });
+}
+
+/**
+ * Lỗi Zalo KHÔNG BAO GIỜ thành công khi gửi lại (khách chặn người lạ, nick bị cấm nhắn người lạ,
+ * khách không nhận tin) hoặc gửi lại chỉ làm tệ hơn (quá giới hạn yêu cầu). Hàm thuần.
+ */
+export function isPermanentSendError(err: unknown): boolean {
+  const m = String((err as { message?: string })?.message ?? err ?? '').toLowerCase().normalize('NFC');
+  // Câu Zalo trả thật (log 22-28/09/2026): "Bạn đang bị cấm nhắn tin cho người lạ", "…chặn không nhận tin nhắn
+  // từ người lạ", "Vượt quá số request cho phép", "…không muốn nhận tin nhắn", "Không thể nhận tin nhắn từ bạn".
+  return /bị cấm nhắn tin|chặn không nhận tin nhắn|vượt quá số request|không muốn nhận tin nhắn|không thể nhận tin nhắn từ bạn|block(s|ed)? stranger|banned from messag|request limit|too many request/.test(m);
 }
 
 /**
@@ -137,6 +153,8 @@ async function sendAlbumWithSafeRetry(
     } catch (err) {
       const elapsed = Date.now() - startedAt;
       lastErr = err;
+      // Lỗi vĩnh viễn / quá giới hạn → không gửi lại (gửi lại chỉ làm Zalo siết thêm).
+      if (isPermanentSendError(err)) throw err;
 
       // Fail rất nhanh → chắc chắn pha upload, chưa gửi gì → retry luôn.
       if (elapsed < IMG_SEND_FAST_MS) {

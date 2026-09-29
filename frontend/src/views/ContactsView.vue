@@ -272,7 +272,7 @@
               <td>
                 <template v-if="contact.lastInboundAt">
                   <div class="cell-strong">{{ formatRecentDateTime(contact.lastInboundAt) }}</div>
-                  <div class="cell-preview" :title="contact.lastInboundPreview || ''">
+                  <div class="cell-preview" :title="messagePreview(contact.lastInboundPreview, contact.lastInboundType ?? null, 500)">
                     {{ messagePreview(contact.lastInboundPreview, contact.lastInboundType ?? null) }}
                   </div>
                 </template>
@@ -281,7 +281,7 @@
               <td>
                 <template v-if="contact.lastOutboundAt">
                   <div class="cell-strong">{{ formatRecentDateTime(contact.lastOutboundAt) }}</div>
-                  <div class="cell-preview" :title="contact.lastOutboundPreview || ''">
+                  <div class="cell-preview" :title="messagePreview(contact.lastOutboundPreview, contact.lastOutboundType ?? null, 500)">
                     {{ messagePreview(contact.lastOutboundPreview, contact.lastOutboundType ?? null) }}
                   </div>
                 </template>

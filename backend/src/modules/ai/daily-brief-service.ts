@@ -81,6 +81,27 @@ export function todayRangeForTimezone(tz: string | null | undefined, now = new D
   return { start, end, date };
 }
 
+const WEEKDAY_VI = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+
+/**
+ * orgDayRange — cùng mốc ngày với todayRangeForTimezone nhưng theo chữ ký mà
+ * module auto-reply đang import (thứ tự tham số now-trước-tz, kèm dateKey và
+ * dateLabel tiếng Việt).
+ *
+ * Giữ riêng thay vì đổi todayRangeForTimezone để không phá các chỗ đang gọi.
+ * tz rỗng/sai định dạng → mặc định +07:00, vì auto-reply truyền thẳng
+ * `org?.timezone` và có thể là undefined.
+ */
+export function orgDayRange(now: Date, tz: string | null | undefined) {
+  const safeTz = /^[+-]\d{2}:\d{2}$/.test(tz || '') ? (tz as string) : '+07:00';
+  const { start, end, date } = todayRangeForTimezone(safeTz, now);
+  const shifted = new Date(start.getTime() + parseOffsetMinutes(safeTz) * 60_000);
+  const dd = String(shifted.getUTCDate()).padStart(2, '0');
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const dateLabel = `${WEEKDAY_VI[shifted.getUTCDay()]}, ${dd}/${mm}/${shifted.getUTCFullYear()}`;
+  return { start, end, dateKey: date, dateLabel };
+}
+
 function contactDisplayName(c: { crmName?: string | null; fullName?: string | null; phone?: string | null } | null | undefined): string {
   if (!c) return 'Khách chưa xác định';
   return c.crmName || c.fullName || (c.phone ? `SĐT ${c.phone.slice(-4).padStart(c.phone.length, '*')}` : 'Khách chưa đặt tên');

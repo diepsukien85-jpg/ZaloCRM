@@ -380,6 +380,18 @@ onMounted(loadData);
   display: flex;
   gap: 8px;
 }
+.scan-btn { background: var(--nb-primary, #2563EB); border-color: var(--nb-primary, #2563EB); }
+.scan-btn:hover { background: var(--nb-primary-dark, #1D4ED8); }
+.back-btn, .refresh-btn, .scan-btn { white-space: nowrap; border-radius: 10px; font-weight: 700; }
+/* Điện thoại: tiêu đề 1 dòng, ô tìm kiếm + nút xuống hàng riêng (trước đây tràn ngang cả trang). */
+@media (max-width: 767px) {
+  .stuck-view { padding: 14px 12px; }
+  .stuck-header { flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .stuck-header h1 { font-size: 19px; flex: 1 1 auto; min-width: 0; }
+  .stuck-search { order: 3; flex: 1 1 100%; max-width: none; margin: 0; }
+  .stuck-actions { order: 4; flex: 1 1 100%; }
+  .stuck-actions > button { flex: 1; }
+}
 
 /* Phase 6 polish — Search box trong Stuck Dashboard */
 .stuck-search {

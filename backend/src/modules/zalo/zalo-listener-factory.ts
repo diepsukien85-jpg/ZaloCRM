@@ -8,7 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../../shared/utils/logger.js';
 import { prisma } from '../../shared/database/prisma-client.js';
 import { handleIncomingMessage, handleMessageUndo } from '../chat/message-handler.js';
-import { detectContentType, extractAlbumInfo, updateContactAvatar } from './zalo-message-helpers.js';
+import { isGroupIgnored, recordIgnoredSelfEcho } from '../chat/ignored-groups-service.js';
+import { detectContentType, extractAlbumInfo, updateContactAvatar, updateContactGender, zaloGender } from './zalo-message-helpers.js';
 import { handleFriendEvent } from './friend-event-handler.js';
 import { consumeIfExpected as consumeReactionEcho } from '../chat/reaction-echo-cache.js';
 
@@ -73,7 +74,10 @@ async function handleZaloReaction(accountId: string, io: Server | null, reaction
         where: { messageId: message.id, reactorId: reactorZaloUid, reactorSource: 'zalo' },
       });
     } else {
-      await prisma.messageReaction.upsert({
+      // 18/09/2026: Zalo đôi khi bắn CÙNG 1 reaction 2 lần sát nhau → 2 upsert song song, Prisma upsert không
+      // atomic (find-rồi-create) → cái sau đụng UNIQUE (message_id, reactor_id, emoji) = P2002 (2 lần/ngày, in stack).
+      // Thử lại 1 lần: lần 2 thấy row → nhánh update, không mất gì.
+      const upsertReaction = () => prisma.messageReaction.upsert({
         where: {
           messageId_reactorId_emoji: {
             messageId: message.id,
@@ -91,6 +95,12 @@ async function handleZaloReaction(accountId: string, io: Server | null, reaction
           emoji: displayEmoji,
         },
       });
+      try {
+        await upsertReaction();
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'P2002') throw err;
+        await upsertReaction();
+      }
     }
 
     // ANTI-DRIFT FIX 2026-05-22: emit authoritative totalCount từ DB sau upsert/delete.
@@ -146,45 +156,69 @@ export interface UserInfoCacheEntry {
   phone?: string;
   globalId: string;   // Zalo toàn cục, không đổi giữa các viewer account — khóa dedup chính
   username: string;   // Zalo handle (t_xxx) — cũng toàn cục, debug-friendly
+  gender?: 'male' | 'female' | null; // Zalo: 0 = nam, 1 = nữ
   cachedAt: number;
 }
 
 const USER_INFO_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const USER_INFO_FAIL_TTL_MS = 60 * 60 * 1000;
+const userInfoFailures = new Map<string, number>();
 
 // Fetch zaloName + avatar + globalId + username from API with a per-pool in-memory cache
-async function resolveZaloName(
+export async function resolveZaloName(
   api: any,
   uid: string,
   cache: Map<string, UserInfoCacheEntry>,
-): Promise<{ zaloName: string; avatar: string; globalId: string; username: string }> {
+): Promise<{ zaloName: string; avatar: string; globalId: string; username: string; gender?: 'male' | 'female' | null }> {
+  // Lỗi nghiệp vụ gần đây (vd tài khoản khoá / không cho xem) → không gọi Zalo lại trong 1 giờ
+  // (trước đây 1 UID lỗi 1.069 lần — gọi Zalo mỗi tin nhắn của người đó).
+  const failedAt = userInfoFailures.get(uid);
+  if (failedAt && Date.now() - failedAt < USER_INFO_FAIL_TTL_MS) return { zaloName: '', avatar: '', globalId: '', username: '' };
   const cached = cache.get(uid);
   if (cached && Date.now() - cached.cachedAt < USER_INFO_CACHE_TTL_MS) {
-    return { zaloName: cached.zaloName, avatar: cached.avatar, globalId: cached.globalId, username: cached.username };
+    return { zaloName: cached.zaloName, avatar: cached.avatar, globalId: cached.globalId, username: cached.username, gender: cached.gender };
   }
 
-  try {
-    const result = await api.getUserInfo(uid);
-    const profiles = result?.changed_profiles || {};
-    const profile = profiles[uid] || profiles[`${uid}_0`];
-    if (profile) {
-      const entry: UserInfoCacheEntry = {
-        zaloName:
-          profile.zaloName ||
-          profile.zalo_name ||
-          profile.displayName ||
-          profile.display_name ||
-          '',
-        avatar: profile.avatar || '',
-        phone: profile.phoneNumber || '',
-        globalId: String(profile.globalId || ''),
-        username: String(profile.username || ''),
-        cachedAt: Date.now(),
-      };
-      cache.set(uid, entry);
-      return { zaloName: entry.zaloName, avatar: entry.avatar, globalId: entry.globalId, username: entry.username };
+  const attempts = 3;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const result = await api.getUserInfo(uid);
+      const profiles = result?.changed_profiles || {};
+      const profile = profiles[uid] || profiles[`${uid}_0`];
+      if (profile) {
+        const entry: UserInfoCacheEntry = {
+          zaloName:
+            profile.zaloName ||
+            profile.zalo_name ||
+            profile.displayName ||
+            profile.display_name ||
+            '',
+          avatar: profile.avatar || '',
+          gender: zaloGender(profile.gender),
+          phone: profile.phoneNumber || '',
+          globalId: String(profile.globalId || ''),
+          username: String(profile.username || ''),
+          cachedAt: Date.now(),
+        };
+        cache.set(uid, entry);
+        return { zaloName: entry.zaloName, avatar: entry.avatar, globalId: entry.globalId, username: entry.username, gender: entry.gender };
+      }
+      break; // gọi được nhưng không có profile → không retry
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientNetErr(err)) break; // lỗi nghiệp vụ/quyền → thử lại vô ích
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 700 * (i + 1)));
     }
-  } catch (err) {
-    logger.warn(`[zalo] getUserInfo failed for ${uid}:`, err);
+  }
+  if (lastErr) {
+    // Mạng chập chờn từ Zalo → chỉ debug (không vào *-error.log). Lỗi thật → warn.
+    if (isTransientNetErr(lastErr)) logger.debug(`[zalo] getUserInfo tạm không lấy được (mạng chập chờn) cho ${uid}`);
+    else {
+      logger.warn(`[zalo] getUserInfo failed for ${uid} (tạm không hỏi lại 1 giờ):`, lastErr);
+      userInfoFailures.set(uid, Date.now());
+      if (userInfoFailures.size > 5000) userInfoFailures.clear();
+    }
   }
   return { zaloName: '', avatar: '', globalId: '', username: '' };
 }
@@ -195,21 +229,59 @@ interface ResolvedGroup {
   membersCount: number | null;
 }
 
-// Fetch group display name + avatar + member count from the zca-js API
-async function resolveGroupInfo(api: any, groupId: string): Promise<ResolvedGroup> {
-  try {
-    const result = await api.getGroupInfo(groupId);
-    const info = result?.gridInfoMap?.[groupId];
-    const members = info?.memVerList || info?.memList || info?.members;
-    return {
-      name: info?.name || '',
-      avatar: info?.avt || info?.fullAvt || info?.avatar || '',
-      membersCount: Array.isArray(members) ? members.length : (info?.totalMember || null),
-    };
-  } catch (err) {
-    logger.warn(`[zalo] getGroupInfo failed for ${groupId}:`, err);
-    return { name: '', avatar: '', membersCount: null };
+// Cache group info: tên/avatar/số thành viên nhóm gần như không đổi theo từng tin.
+// resolveGroupInfo() TRƯỚC ĐÂY gọi Zalo trên MỖI tin nhắn nhóm → nhóm chat sôi động
+// = hàng chục lệnh getGroupInfo/phút, mỗi lệnh là 1 kết nối TLS ra server Zalo và Zalo
+// hay reset (ECONNRESET). Cache 10 phút giảm gọi ~99% → ít reset, ít log rác.
+const GROUP_INFO_TTL_MS = 10 * 60 * 1000;
+const groupInfoCache = new Map<string, { data: ResolvedGroup; at: number }>();
+
+// Lỗi mạng CHẬP CHỜN (Zalo reset TLS / DNS / timeout) — thử lại được, KHÔNG phải lỗi code.
+// Không đưa các lỗi này vào log ERROR (console.warn → stderr → *-error.log → Tiểu Linh báo).
+export function isTransientNetErr(err: any): boolean {
+  const code = String(err?.code || err?.cause?.code || '');
+  if (/^(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_)/.test(code)) return true;
+  const msg = String(err?.message || '') + ' ' + String(err?.cause?.message || '');
+  return /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|network|read ECONN/i.test(msg);
+}
+
+// Fetch group display name + avatar + member count from the zca-js API.
+// Có cache + retry lỗi mạng chập chờn (Zalo hay ECONNRESET khi gọi từ xa).
+export async function resolveGroupInfo(api: any, groupId: string): Promise<ResolvedGroup> {
+  const cached = groupInfoCache.get(groupId);
+  if (cached && Date.now() - cached.at < GROUP_INFO_TTL_MS) return cached.data;
+
+  const attempts = 3;
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const result = await api.getGroupInfo(groupId);
+      const info = result?.gridInfoMap?.[groupId];
+      const members = info?.memVerList || info?.memList || info?.members;
+      const data: ResolvedGroup = {
+        name: info?.name || '',
+        avatar: info?.avt || info?.fullAvt || info?.avatar || '',
+        membersCount: Array.isArray(members) ? members.length : (info?.totalMember || null),
+      };
+      groupInfoCache.set(groupId, { data, at: Date.now() });
+      return data;
+    } catch (err) {
+      lastErr = err;
+      // Lỗi mạng chập chờn → thử lại; lỗi nghiệp vụ/quyền → dừng ngay (thử lại vô ích).
+      if (!isTransientNetErr(err)) break;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+    }
   }
+
+  // Hết lượt: còn cache cũ thì dùng tạm (tên nhóm đúng vẫn hơn rỗng).
+  if (cached) return cached.data;
+  if (isTransientNetErr(lastErr)) {
+    // Mạng chập chờn từ phía Zalo — KHÔNG log ERROR (tránh spam + Tiểu Linh báo oan). Chỉ debug.
+    logger.debug(`[zalo] getGroupInfo tạm không lấy được (mạng chập chờn) cho ${groupId}`);
+  } else {
+    logger.warn(`[zalo] getGroupInfo failed for ${groupId}:`, lastErr);
+  }
+  return { name: '', avatar: '', membersCount: null };
 }
 
 export interface ListenerContext {
@@ -360,6 +432,21 @@ export function attachZaloListener(ctx: ListenerContext): void {
       const isGroup = message.type === 1;
       const senderUid = String(message.data?.uidFrom || '');
 
+      // Nhóm bị bỏ qua: dừng TRƯỚC khi gọi getUserInfo/getGroupInfo để khỏi tốn
+      // request Zalo cho nhóm đăng bài nhiều tin. Echo ảnh self vẫn được đếm trong
+      // bộ nhớ (retry gửi ảnh an toàn của public API dựa vào số này).
+      if (isGroup && isGroupIgnored(orgId, message.threadId)) {
+        if (message.isSelf) {
+          recordIgnoredSelfEcho(
+            accountId,
+            String(message.threadId || ''),
+            detectContentType(message.data?.msgType, message.data?.content),
+            parseInt(message.data?.ts || String(Date.now())),
+          );
+        }
+        return;
+      }
+
       // Resolve display name — prefer zaloName from API over dName.
       // Self msg gửi cho người lạ: resolve theo threadId để biết tên người NHẬN
       // → recipientName được dùng trong upsertContact thay vì 'Unknown'.
@@ -385,6 +472,7 @@ export function attachZaloListener(ctx: ListenerContext): void {
           } else {
             if (userInfo.zaloName) senderName = userInfo.zaloName;
             if (userInfo.avatar) updateContactAvatar(senderUid, userInfo.avatar);
+            if (userInfo.gender && !isGroup) updateContactGender(senderUid, userInfo.gender);
           }
         }
       }

@@ -43,6 +43,10 @@ async function withZaloRetry<T>(label: string, fn: () => Promise<T>, attempts = 
       return await fn();
     } catch (err) {
       lastErr = err;
+      // 18/09/2026: Zalo trả MÃ LỖI rõ ràng ([zalo:NNN]) là lỗi nghiệp vụ/quyền, không phải mạng chập chờn
+      // → thử lại vô ích (nick Minmy Luxury: getSentFriendRequests [zalo:112] 3 lần x mỗi 15 phút, ~100 dòng log/ngày).
+      const msg = String((err as { message?: unknown })?.message ?? '');
+      if (/\[zalo:\d+\]/.test(msg)) break;
       if (i < attempts - 1) {
         logger.warn(`[friend-sync] ${label} lỗi (lần ${i + 1}/${attempts}), thử lại sau ${delayMs}ms`);
         await new Promise((r) => setTimeout(r, delayMs));
@@ -177,7 +181,18 @@ export async function syncFriendsForAccount(
   // (rate limit, network) bubble lên outer try/catch.
   try {
     const liveRaw: any = await withZaloRetry('getAllFriends', () => zaloOps.getAllFriends(accountId));
-    const sentRaw: any = await withZaloRetry('getSentFriendRequests', () => zaloOps.getSentFriendRequests(accountId));
+    // 18/09/2026: danh sách LỜI MỜI ĐÃ GỬI là bước phụ. Nick Minmy Luxury (0c309318) bị Zalo trả [zalo:112]
+    // cho riêng lệnh này (getAllFriends vẫn OK) suốt từ 17/09 → trước đây cả đợt sync bị huỷ, nick đó
+    // 0 bạn bè được đồng bộ mỗi ngày + 28 dòng stack/giờ. Nay: hỏng bước này thì coi như [] và vẫn đồng bộ bạn bè.
+    let sentRaw: any = [];
+    try {
+      sentRaw = await withZaloRetry('getSentFriendRequests', () => zaloOps.getSentFriendRequests(accountId));
+    } catch (sentErr) {
+      // [zalo:112] = "không có lời mời nào đang chờ" (theo ghi chú SDK) → danh sách rỗng, không phải lỗi.
+      if (/\[zalo:112\]|\b112\b/.test(String((sentErr as Error)?.message ?? sentErr)) || (sentErr as { code?: unknown })?.code === 112) {
+        logger.debug(`[friend-sync:${accountId}] không có lời mời kết bạn đang chờ (zalo:112)`);
+      } else logger.warn(`[friend-sync:${accountId}] getSentFriendRequests không khả dụng (${String((sentErr as Error)?.message ?? sentErr).slice(0, 120)}) — bỏ qua bước lời mời đã gửi, vẫn đồng bộ bạn bè`);
+    }
     liveFriends = Array.isArray(liveRaw) ? liveRaw
       : Array.isArray(liveRaw?.data) ? liveRaw.data
       : Array.isArray(liveRaw?.items) ? liveRaw.items

@@ -89,7 +89,10 @@ export async function listAvatars(accountId: string): Promise<unknown[]> {
     { accountId, category: 'profile', operation: 'listAvatars' },
     (api) => api.getAvatarList(),
   );
-  return Array.isArray(result) ? result : [];
+  // zca-js 2.x trả { albumId, photos: [...], hasMore }.
+  if (Array.isArray(result)) return result;
+  const photos = (result as { photos?: unknown })?.photos;
+  return Array.isArray(photos) ? photos : [];
 }
 
 /** Delete an avatar by its ID */

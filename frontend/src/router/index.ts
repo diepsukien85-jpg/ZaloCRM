@@ -106,9 +106,11 @@ const routes = [
       { path: 'crm/tags',        name: 'Settings.Tags',        component: () => import('@/components/settings/CrmTagManagement.vue') },
       { path: 'crm/zalo-labels', name: 'Settings.ZaloLabels',  component: () => import('@/components/settings/ZaloLabelsManagement.vue') },
       { path: 'crm/scoring',     name: 'Settings.Scoring',     component: () => import('@/views/ScoringSettingsView.vue') },
+      { path: 'crm/ai-auto-reply', name: 'Settings.AiAutoReply', component: () => import('@/views/settings/AiAutoReplySettingsView.vue') },
 
       // 🔌 Channels & Integrations
       { path: 'channels/zalo',         name: 'Settings.ZaloAccounts', component: () => import('@/views/ZaloAccountsView.vue') },
+      { path: 'channels/ignored-groups', name: 'Settings.IgnoredGroups', component: () => import('@/views/settings/IgnoredGroupsSettingsView.vue') },
       { path: 'channels/facebook',     name: 'Settings.Facebook',     component: () => import('@/views/settings/channels/FacebookChannelView.vue') },
       { path: 'channels/integrations', name: 'Settings.Integrations', component: () => import('@/views/IntegrationsView.vue') },
 

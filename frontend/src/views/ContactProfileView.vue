@@ -18,7 +18,19 @@
     Liên hệ Phase 6: aggregateScore = MAX(Friend.scores) theo architecture
     chốt 2026-05-16 (chát + reference TODO Phase 6+ score).
   -->
-  <div class="cp-view">
+  <!-- Tính năng chưa hoàn thiện → hiện thông báo thân thiện cho user, giữ skeleton
+       bên dưới để dev tiếp (bật FEATURE_READY khi backend + view xong). -->
+  <div v-if="!FEATURE_READY" class="cp-view">
+    <header class="cp-header">
+      <button class="back-btn" @click="$router.back()">← Quay lại</button>
+      <h1>🧑 Hồ sơ KH tổng hợp</h1>
+    </header>
+    <div class="cp-loading">
+      🚧 Tính năng đang phát triển. Vui lòng xem thông tin khách hàng tại trang
+      <router-link to="/contacts">Khách hàng</router-link> hoặc trong khung chat.
+    </div>
+  </div>
+  <div v-else class="cp-view">
     <header class="cp-header">
       <button class="back-btn" @click="$router.back()">← Quay lại</button>
       <h1>🧑 Hồ sơ KH tổng hợp <span class="badge-skeleton">SKELETON</span></h1>
@@ -75,12 +87,15 @@ import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useContactProfile } from '@/composables/use-contact-profile';
 
+// false = chưa build xong (backend /contacts/:id/profile chưa có) → không gọi fetch
+const FEATURE_READY: boolean = false;
+
 const route = useRoute();
 const contactId = computed(() => String(route.params.id || ''));
 const { profile, loading, error, fetchContactProfile } = useContactProfile();
 
 onMounted(() => {
-  if (contactId.value) fetchContactProfile(contactId.value);
+  if (FEATURE_READY && contactId.value) fetchContactProfile(contactId.value);
 });
 </script>
 

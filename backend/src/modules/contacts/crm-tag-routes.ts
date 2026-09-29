@@ -39,24 +39,9 @@ export async function crmTagRoutes(app: FastifyInstance): Promise<void> {
     try {
       const user = request.user!;
 
-      // Optional recount: scan toàn bộ Contact.tags + map vào CrmTag.usageCount
+      // Optional recount: đếm lại usageCount (Contact.tags + thẻ theo nick của bạn bè)
       if (request.query.recount === '1') {
-        const contacts = await prisma.contact.findMany({
-          where: { orgId: user.orgId },
-          select: { tags: true },
-        });
-        const counts = new Map<string, number>();
-        for (const c of contacts) {
-          const arr = Array.isArray(c.tags) ? (c.tags as string[]) : [];
-          for (const tag of arr) counts.set(tag, (counts.get(tag) || 0) + 1);
-        }
-        const allTags = await prisma.crmTag.findMany({ where: { orgId: user.orgId } });
-        await Promise.all(
-          allTags.map(t => prisma.crmTag.update({
-            where: { id: t.id },
-            data: { usageCount: counts.get(t.name) || 0 },
-          })),
-        );
+        const { counts, allTags } = await recountTagUsage(user.orgId);
         // Auto-create "orphan" tags (used in Contact.tags but not defined in CrmTag)
         const definedNames = new Set(allTags.map(t => t.name));
         const orphans = [...counts.keys()].filter(n => !definedNames.has(n) && n.trim());
@@ -261,4 +246,29 @@ export async function crmTagRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: 'Failed to reorder' });
     }
   });
+}
+
+/**
+ * Đếm lại CrmTag.usageCount = số KHÁCH (contact) mang thẻ: Contact.tags + Friend.crmTagsPerNick
+ * (thẻ Zalo "🔵 X" nằm ở đây — trước 28/09/2026 chỉ đếm Contact.tags nên mọi thẻ Zalo hiện 0 khách).
+ */
+export async function recountTagUsage(orgId: string): Promise<{ counts: Map<string, number>; allTags: Array<{ id: string; name: string }> }> {
+  const byTag = new Map<string, Set<string>>();
+  const add = (tag: unknown, contactId: string) => {
+    const name = typeof tag === 'string' ? tag.trim() : (tag && typeof tag === 'object' && typeof (tag as { name?: unknown }).name === 'string') ? String((tag as { name: string }).name).trim() : '';
+    if (!name) return;
+    if (!byTag.has(name)) byTag.set(name, new Set());
+    byTag.get(name)!.add(contactId);
+  };
+  const contacts = await prisma.contact.findMany({ where: { orgId, mergedInto: null }, select: { id: true, tags: true } });
+  for (const c of contacts) if (Array.isArray(c.tags)) for (const t of c.tags as unknown[]) add(t, c.id);
+  const friends = await prisma.friend.findMany({ where: { orgId }, select: { contactId: true, crmTagsPerNick: true } });
+  for (const f of friends) if (Array.isArray(f.crmTagsPerNick)) for (const t of f.crmTagsPerNick as unknown[]) add(t, f.contactId);
+  const counts = new Map([...byTag.entries()].map(([k, v]) => [k, v.size]));
+  const allTags = await prisma.crmTag.findMany({ where: { orgId }, select: { id: true, name: true, usageCount: true } });
+  for (const t of allTags) {
+    const n = counts.get(t.name) || 0;
+    if (n !== t.usageCount) await prisma.crmTag.update({ where: { id: t.id }, data: { usageCount: n } });
+  }
+  return { counts, allTags };
 }

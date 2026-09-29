@@ -10,8 +10,8 @@ import { runAutomationRules } from '../automation/automation-service.js';
 import { applyContactAggregateFromMessage, applyContactInteraction, applyFriendAggregate } from '../contacts/contact-aggregate.js';
 import { onInboundMessage as onInboundScoring, onOutboundMessage as onOutboundScoring } from '../scoring/scoring-hooks.js';
 import { syncReminderFromMessage } from '../contacts/reminder-sync.js';
-import { uploadBuffer } from '../../shared/storage/r2-client.js';
-import { config } from '../../config/index.js';
+import { uploadBuffer, isManagedMediaUrl } from '../../shared/storage/media-store.js';
+import { isGroupIgnored, recordIgnoredSelfEcho } from './ignored-groups-service.js';
 
 export interface IncomingMessage {
   accountId: string;
@@ -83,17 +83,12 @@ function safeParseJsonObject(value: string): Record<string, unknown> | null {
 }
 
 // URL đã nằm trong kho của mình thì không mirror lại (tránh vòng lặp tự sao chép).
-// Nhận cả URL MinIO cũ (host 127.0.0.1:9000, còn trong DB trước 2026-08-13) lẫn
-// URL R2 mới — kho cũ không còn ghi nhưng dữ liệu cũ vẫn chảy qua đây.
-function isLocalStorageUrl(value: string): boolean {
-  if (value.startsWith(`${config.s3PublicUrl}/`)) return true;
-  return value.startsWith(`${config.s3Endpoint}/`) || value.includes('127.0.0.1:9000/');
-}
-
+// isManagedMediaUrl nhận cả kho hiện tại (/api/v1/media/…) lẫn hai kho cũ còn tồn
+// trong DB: R2 (crmcdn.shinsulab.com, tới 2026-09-22) và MinIO (127.0.0.1:9000).
 function isMirrorableUrl(value: unknown): value is string {
   return typeof value === 'string' &&
     /^https?:\/\//i.test(value) &&
-    !isLocalStorageUrl(value);
+    !isManagedMediaUrl(value);
 }
 
 function fileNameFromUrl(url: string, contentType: string, mimeType: string): string {
@@ -144,6 +139,13 @@ async function mirrorRemoteMediaUrl(url: string, contentType: string): Promise<s
   }
   const arrayBuffer = await response.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
+  // Zalo CDN thỉnh thoảng trả 200 kèm thân RỖNG. Không chặn ở đây thì ta lưu một
+  // file 0 byte rồi GHI ĐÈ url Zalo gốc bằng nó — ảnh hỏng vĩnh viễn, không cứu
+  // được. Ném lỗi để nơi gọi giữ nguyên url gốc, lần sau mở vẫn còn xem được.
+  // (Phát hiện 23/09/2026: 2 ảnh đã mất theo đúng kiểu này.)
+  if (buffer.length === 0) {
+    throw new Error('thân phản hồi rỗng (0 byte)');
+  }
   const mimeType = response.headers.get('content-type')?.split(';')[0] || guessMimeType(url, contentType);
   const uploaded = await uploadBuffer(buffer, mimeType, fileNameFromUrl(url, contentType, mimeType));
   return uploaded.url;
@@ -236,6 +238,15 @@ export async function handleIncomingMessage(
       select: { orgId: true, ownerUserId: true },
     });
     if (!account) return null;
+
+    // Nhóm bị bỏ qua (nhóm đăng bài): không lưu tin. Echo ảnh self vẫn được đếm
+    // trong bộ nhớ để retry gửi ảnh (public API) không gửi trùng.
+    if (msg.threadType === 'group' && isGroupIgnored(account.orgId, msg.threadId)) {
+      if (msg.isSelf && !msg.isBackfill) {
+        recordIgnoredSelfEcho(msg.accountId, msg.threadId, msg.contentType, msg.timestamp);
+      }
+      return null;
+    }
 
     const contactId = await upsertContact(msg, account.orgId);
 
@@ -646,42 +657,46 @@ async function upsertContact(msg: IncomingMessage, orgId: string): Promise<strin
   //  2. By zaloUsername — Zalo handle (t_xxx) cũng toàn cục
   //  3. By zaloUid (per-account) — fallback khi global identifiers chưa resolve
   //  4. Create new contact
-  let contact: { id: string; fullName: string | null; zaloGlobalId: string | null; zaloUid: string | null } | null = null;
-  if (globalId) {
-    contact = await prisma.contact.findFirst({
-      where: { orgId, zaloGlobalId: globalId },
-      select: { id: true, fullName: true, zaloGlobalId: true, zaloUid: true },
-    });
-  }
-  if (!contact && username) {
-    contact = await prisma.contact.findFirst({
-      where: { orgId, zaloUsername: username },
-      select: { id: true, fullName: true, zaloGlobalId: true, zaloUid: true },
-    });
-  }
-  if (!contact) {
-    contact = await prisma.contact.findFirst({
-      where: { orgId, zaloUid: contactUid },
-      select: { id: true, fullName: true, zaloGlobalId: true, zaloUid: true },
-    });
-  }
+  type ContactPick = { id: string; fullName: string | null; zaloGlobalId: string | null; zaloUid: string | null };
+  const sel = { id: true, fullName: true, zaloGlobalId: true, zaloUid: true } as const;
+  const findContact = async (): Promise<ContactPick | null> => {
+    let c: ContactPick | null = null;
+    if (globalId) c = await prisma.contact.findFirst({ where: { orgId, zaloGlobalId: globalId }, select: sel });
+    if (!c && username) c = await prisma.contact.findFirst({ where: { orgId, zaloUsername: username }, select: sel });
+    if (!c) c = await prisma.contact.findFirst({ where: { orgId, zaloUid: contactUid }, select: sel });
+    return c;
+  };
+  let contact: ContactPick | null = await findContact();
+  let justCreated = false;
 
   if (!contact) {
-    const created = await prisma.contact.create({
-      data: {
-        id: randomUUID(),
-        orgId,
-        zaloUid: contactUid,
-        zaloGlobalId: globalId || null,
-        zaloUsername: username || null,
-        fullName: contactName || 'Unknown',
-      },
-      select: { id: true, fullName: true, zaloGlobalId: true, zaloUid: true },
-    });
-    contact = created;
-    emitWebhook(orgId, 'contact.created', { contactId: contact.id, fullName: contact.fullName });
-  } else {
+    try {
+      const created = await prisma.contact.create({
+        data: {
+          id: randomUUID(),
+          orgId,
+          zaloUid: contactUid,
+          zaloGlobalId: globalId || null,
+          zaloUsername: username || null,
+          fullName: contactName || 'Unknown',
+        },
+        select: sel,
+      });
+      contact = created;
+      justCreated = true;
+      emitWebhook(orgId, 'contact.created', { contactId: contact.id, fullName: contact.fullName });
+    } catch (err) {
+      // 18/09/2026: ĐUA TẠO CONTACT — cùng 1 khách nhắn 2 nick (hoặc 2 tin liền nhau) → 2 luồng cùng thấy "chưa có"
+      // rồi cùng create → luồng sau đụng UNIQUE (org_id, zalo_global_id) = P2002 và CẢ TIN NHẮN đó bị bỏ
+      // (handleIncomingMessage error, 13 lần/giờ). Không trong transaction → tra lại là có ngay row luồng kia vừa tạo.
+      if ((err as { code?: string })?.code !== 'P2002') throw err;
+      contact = await findContact();
+      if (!contact) throw err;
+    }
+  }
+  if (!justCreated) {
     // Backfill globalId/username nếu vừa resolve được, hoặc cập nhật fullName từ Unknown.
+    // (cũng chạy sau khi thua cuộc đua tạo: luồng kia có thể tạo với ít thông tin hơn)
     const patch: { zaloGlobalId?: string; zaloUsername?: string; fullName?: string; zaloUid?: string } = {};
     if (globalId && contact.zaloGlobalId !== globalId) patch.zaloGlobalId = globalId;
     if (username) patch.zaloUsername = username;
@@ -729,7 +744,8 @@ async function findOrCreateConversation(
     return { id: existing.id };
   }
 
-  return prisma.conversation.create({
+  try {
+    return await prisma.conversation.create({
     data: {
       id: randomUUID(),
       orgId,
@@ -745,7 +761,17 @@ async function findOrCreateConversation(
       isReplied: msg.isSelf,
     },
     select: { id: true },
-  });
+    });
+  } catch (err) {
+    // 2 tin đầu tiên tới cùng lúc → lượt kia vừa tạo hội thoại (trùng khoá) → dùng lại, không bỏ tin.
+    if ((err as { code?: string })?.code !== 'P2002') throw err;
+    const again = await prisma.conversation.findFirst({
+      where: { zaloAccountId: msg.accountId, externalThreadId },
+      select: { id: true },
+    });
+    if (!again) throw err;
+    return again;
+  }
 }
 
 // Update conversation metadata after a new message

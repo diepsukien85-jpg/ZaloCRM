@@ -11,7 +11,7 @@
       :src="src"
       :alt="name || 'avatar'"
       class="av-img"
-      @error="imgError = true"
+      @error="onImgError"
     />
     <span v-else class="av-initials" :style="initialsStyle">{{ initials }}</span>
 
@@ -76,7 +76,13 @@ const props = withDefaults(defineProps<{
   title: '',
 });
 
+const emit = defineEmits<{ (e: 'error'): void }>();
+
 const imgError = ref(false);
+function onImgError() {
+  imgError.value = true;
+  emit('error'); // cha có thể xin link mới (vd link avatar Zalo hết hạn → 403)
+}
 
 // Reset imgError khi src đổi
 watch(() => props.src, () => { imgError.value = false; });

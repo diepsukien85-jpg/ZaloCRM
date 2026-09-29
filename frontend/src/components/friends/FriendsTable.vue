@@ -624,6 +624,8 @@ function healthTooltip(f: DbFriend): string {
   flex: 1;
   overflow: auto;
   background: #fff;
+  /* Nền trắng cố định → chữ tối cố định, không kế thừa màu chữ dark theme */
+  color: #1a2433;
   /* Phase 3 — smooth horizontal scroll khi nhiều cột toggle bật */
   scroll-behavior: smooth;
   scrollbar-width: thin;

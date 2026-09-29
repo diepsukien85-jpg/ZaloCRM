@@ -181,12 +181,11 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Contact-level filter — gộp vào where.contact nested
     const contactWhere: Record<string, unknown> = {};
-    if (search) {
-      contactWhere.OR = [
-        { fullName: { contains: search, mode: 'insensitive' } },
-        { crmName: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search } },
-      ];
+    // Tìm kiếm: không phân biệt dấu, 1 phần tên, gồm tên nhóm / tên gợi nhớ / SĐT — xem conversation-search.ts.
+    if (search.trim()) {
+      const { searchConversationIds } = await import('./conversation-search.js');
+      const ids = await searchConversationIds(user.orgId, search);
+      where.id = { in: ids.length ? ids : ['__khong_co__'] };
     }
     if (statusId) contactWhere.statusId = statusId;
     if (assignedUserId) contactWhere.assignedUserId = assignedUserId;
@@ -416,6 +415,7 @@ export async function chatRoutes(app: FastifyInstance) {
       updatedAt: Date;
       crmTagsPerNick: unknown;
       aliasInNick: string | null;        // ui-phase5: "Tên gợi nhớ" Zalo sync 2-way
+      zaloAvatarUrl: string | null;      // avatar KH nhìn từ nick này — FE chọn link còn hạn
       // Per-pair counter (FE header cột 3 đọc — fix bug 235/198 revert 0/0)
       totalInbound: number;
       totalOutbound: number;
@@ -455,6 +455,7 @@ export async function chatRoutes(app: FastifyInstance) {
           updatedAt: true,                     // last status change — dùng cho pendingDaysLabel
           crmTagsPerNick: true,                // per-pair CRM tags (kèm Zalo-mirrored "🔵 X")
           aliasInNick: true,                   // "Tên gợi nhớ" Zalo, sync 2-way (ui-phase5)
+          zaloAvatarUrl: true,                 // link avatar Zalo có hạn — FE lấy link còn hạn hơn
           // ── Per-pair counter ─────────────────────────────────────────────
           // KHÔNG include trước đây gây bug: header MessageThread cột 3 đọc
           // friendship.totalInbound/Outbound → list refresh override conv →
@@ -484,6 +485,7 @@ export async function chatRoutes(app: FastifyInstance) {
         updatedAt: f.updatedAt,
         crmTagsPerNick: f.crmTagsPerNick,
         aliasInNick: f.aliasInNick,          // ui-phase5
+        zaloAvatarUrl: f.zaloAvatarUrl,
         // Per-pair counter — header chat cột 3 dùng (fix bug 235/198 → 0/0)
         totalInbound: f.totalInbound,
         totalOutbound: f.totalOutbound,

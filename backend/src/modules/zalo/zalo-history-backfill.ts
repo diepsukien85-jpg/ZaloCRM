@@ -8,6 +8,7 @@
  * Idempotent: re-running is safe — message-handler dedup guards prevent duplicates.
  * Fire-and-forget callable: errors are logged, not propagated.
  */
+import { fetchGroupHistory } from './zalo-message-sync.js';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../shared/database/prisma-client.js';
 import { logger } from '../../shared/utils/logger.js';
@@ -254,8 +255,8 @@ export async function backfillAccountHistory(api: any, accountId: string): Promi
       const groupAvatar = group?.avt || group?.avatar || null;
       const membersCount = group?.totalMember ?? group?.memberCount ?? null;
 
-      const history = await api.getGroupChatHistory(groupId, MESSAGES_PER_GROUP);
-      const messages = history?.groupMsgs || history?.data?.groupMsgs || [];
+      // 404 (Zalo gỡ endpoint lịch sử nhóm) → [] — vẫn tạo hội thoại nhóm, không đếm lỗi.
+      const messages = await fetchGroupHistory(api, accountId, groupId, MESSAGES_PER_GROUP);
 
       for (const msg of messages as any[]) {
         try {

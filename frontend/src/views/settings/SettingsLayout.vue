@@ -1,5 +1,11 @@
 <template>
-  <div class="settings-layout">
+  <div class="settings-layout" :class="{ 'sl-mobile-open': mobileNavOpen }">
+    <!-- Điện thoại: danh mục cài đặt gấp lại thành 1 nút (trước chiếm 2/3 màn hình, nội dung còn ~100px) -->
+    <button type="button" class="sl-mobile-toggle" :aria-expanded="mobileNavOpen" @click="mobileNavOpen = !mobileNavOpen">
+      <span>☰ Danh mục cài đặt</span>
+      <span class="sl-mobile-current">{{ activeItem?.item.label || '' }}</span>
+      <span class="sl-chevron">{{ mobileNavOpen ? '▴' : '▾' }}</span>
+    </button>
     <!-- Sidebar -->
     <aside class="sl-sidebar" aria-label="Cài đặt sidebar">
       <header class="sl-header">
@@ -91,6 +97,8 @@ import { useSettingsNav } from '@/composables/use-settings-nav';
 
 const route = useRoute();
 const router = useRouter();
+const mobileNavOpen = ref(false);
+watch(() => route.path, () => { mobileNavOpen.value = false; });
 const { visibleGroups, activeItem, searchItems, defaultRoute } = useSettingsNav();
 
 const searchQuery = ref('');
@@ -144,9 +152,9 @@ onMounted(() => {
 .settings-layout {
   display: grid;
   grid-template-columns: 260px 1fr;
-  height: calc(100vh - 56px);
-  background: #FAFAFC;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  height: calc(100vh - var(--smax-topnav-h, 52px));
+  background: var(--nb-bg, #F0F7FF);
+  font-family: inherit;
   font-size: 13.5px;
   color: #1F2D3D;
   -webkit-font-smoothing: antialiased;
@@ -327,7 +335,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #FAFAFC;
+  background: var(--nb-bg, #F0F7FF);
 }
 .sl-breadcrumb {
   display: flex;
@@ -360,6 +368,21 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 24px 32px;
+}
+.sl-mobile-toggle { display: none; }
+@media (max-width: 768px) {
+  .settings-layout { display: flex; flex-direction: column; height: auto; min-height: calc(100vh - 120px); }
+  .sl-mobile-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 12px 16px; background: #fff; border: none; border-bottom: 1px solid var(--nb-border-light, #DBEAFE);
+    font: inherit; font-weight: 800; color: var(--nb-primary, #2563EB); cursor: pointer; text-align: left;
+  }
+  .sl-mobile-current { flex: 1; min-width: 0; color: var(--nb-text-2, #475569); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings-layout .sl-sidebar { display: none; border-right: none; border-bottom: 1px solid var(--nb-border-light, #DBEAFE); max-height: 70vh; overflow-y: auto; }
+  .settings-layout.sl-mobile-open .sl-sidebar { display: flex; }
+  .sl-breadcrumb { display: none; }
+  .sl-content { overflow: visible; }
+  .sl-content-body { padding: 14px 12px; overflow-x: auto; }
 }
 .sl-content-body::-webkit-scrollbar { width: 8px; }
 .sl-content-body::-webkit-scrollbar-thumb { background: #D4D6DB; border-radius: 4px; }

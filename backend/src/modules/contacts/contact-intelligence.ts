@@ -13,8 +13,8 @@ async function runIntelligencePipeline(): Promise<void> {
 }
 
 export function startContactIntelligence(): void {
-  // 02:30 UTC = 09:30 Vietnam time (UTC+7)
-  cron.schedule('30 2 * * *', async () => {
+  // 09:30 giờ VN (ghi rõ múi giờ — máy chủ chạy TZ=Asia/Ho_Chi_Minh, trước đây lệch 7 giờ)
+  cron.schedule('30 9 * * *', async () => {
     logger.info('[intelligence] Starting contact intelligence cron...');
     try {
       await runIntelligencePipeline();
@@ -22,7 +22,7 @@ export function startContactIntelligence(): void {
     } catch (err) {
       logger.error('[intelligence] Cron error:', err);
     }
-  });
+  }, { timezone: 'Asia/Ho_Chi_Minh' });
   logger.info('[intelligence] Contact intelligence cron started (daily 02:30 UTC)');
 }
 

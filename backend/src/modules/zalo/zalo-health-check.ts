@@ -35,7 +35,7 @@ export function startZaloHealthCheck(): void {
     }
   });
 
-  // Daily at 04:00 UTC (11:00 AM VN): refresh all sessions to keep cookies alive
+  // 04:00 giờ VN (vắng khách — làm mới phiên đóng listener vài giây): refresh all sessions to keep cookies alive
   cron.schedule('0 4 * * *', async () => {
     logger.info('[health-check] Daily session refresh starting...');
     try {
@@ -63,7 +63,7 @@ export function startZaloHealthCheck(): void {
     } catch (err) {
       logger.error('[health-check] Error during daily refresh:', err);
     }
-  });
+  }, { timezone: 'Asia/Ho_Chi_Minh' });
 
   logger.info('[health-check] Zalo health check started (every 5 min + daily refresh at 04:00 UTC)');
 }

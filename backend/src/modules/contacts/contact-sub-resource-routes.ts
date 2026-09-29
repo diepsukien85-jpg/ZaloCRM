@@ -41,13 +41,25 @@ export async function contactSubResourceRoutes(app: FastifyInstance): Promise<vo
       const user = request.user!;
       const { uid } = request.params as { uid: string };
 
-      const contact = await prisma.contact.findFirst({
+      const include = {
+        assignedUser: { select: { id: true, fullName: true, email: true } },
+        _count: { select: { conversations: true, appointments: true } },
+      } as const;
+      let contact = await prisma.contact.findFirst({
         where: { zaloUid: uid, orgId: user.orgId, mergedInto: null },
-        include: {
-          assignedUser: { select: { id: true, fullName: true, email: true } },
-          _count: { select: { conversations: true, appointments: true } },
-        },
+        include,
       });
+      // UID Zalo khác nhau theo từng nick: Contact.zaloUid chỉ lưu UID nhìn từ 1 nick → tra thêm
+      // bạn bè (zaloUidInNick) của mọi nick trong tổ chức.
+      if (!contact) {
+        const friend = await prisma.friend.findFirst({
+          where: { orgId: user.orgId, zaloUidInNick: uid },
+          select: { contactId: true },
+        });
+        if (friend?.contactId) {
+          contact = await prisma.contact.findFirst({ where: { id: friend.contactId, orgId: user.orgId, mergedInto: null }, include });
+        }
+      }
 
       if (!contact) return reply.send({ contact: null });
 

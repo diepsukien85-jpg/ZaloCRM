@@ -158,17 +158,43 @@ async function shouldUseCaption(
 }
 
 // ── Gọi ngược BOT (đính x-internal-key, KHÔNG log key) ──────────────────────────
+
+/** Slug công ty (tenant) suy từ subdomain của botBaseUrl — vd https://noibo.shinsulab.com → 'noibo'.
+ *  BOT là đa công ty; mỗi job lưu botBaseUrl riêng theo công ty nên không cần thêm cột DB. */
+function tenantSlugFromBaseUrl(baseUrl: string): string | null {
+  try {
+    const host = new URL(baseUrl).hostname;
+    const parts = host.split('.');
+    return parts.length > 2 && parts[0] ? parts[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** tenant_slug BOT gửi kèm lúc tạo job (lưu trong config JSON, 18/09/2026) — ưu tiên hơn suy từ subdomain,
+ *  vì bot_base_url nay có thể là http://127.0.0.1:3001 (không có subdomain). */
+function tenantSlugFromConfig(config: unknown): string | null {
+  const v = (config as Record<string, unknown> | null)?.tenant_slug;
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
 async function botFetch(
   baseUrl: string,
   internalKey: string,
   path: string,
   init: { method: 'GET' | 'POST'; body?: unknown },
+  tenantSlug?: string | null,
 ): Promise<any> {
   const url = new URL(path, baseUrl).toString();
+  const slug = tenantSlug ?? tenantSlugFromBaseUrl(baseUrl);
   const res = await fetch(url, {
     method: init.method,
     headers: {
       'x-internal-key': internalKey,
+      // BOT là đa công ty (multi-tenant): header này cho BOT biết callback thuộc công ty nào.
+      // Thiếu nó BOT phải suy từ subdomain, và nếu cũng không có thì fallback về tenant mặc
+      // định → ghi dữ liệu sang nhầm công ty.
+      ...(slug ? { 'x-tenant-slug': slug } : {}),
       ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
@@ -179,9 +205,10 @@ async function botFetch(
   return ct.includes('application/json') ? res.json() : null;
 }
 
+
 /** POST UID mới tìm được về BOT (best-effort, nuốt lỗi). */
 async function postUidToBot(
-  job: { botBaseUrl: string; internalKey: string },
+  job: { botBaseUrl: string; internalKey: string; tenantSlug?: string | null },
   customerId: number,
   zaloUid: string | null,
   status: 'found' | 'not_found' | 'no_phone',
@@ -190,11 +217,12 @@ async function postUidToBot(
     await botFetch(job.botBaseUrl, job.internalKey, '/api/chao-hang/uid', {
       method: 'POST',
       body: { customer_id: customerId, zalo_uid: zaloUid, status },
-    });
+    }, job.tenantSlug);
   } catch (err) {
     logger.warn(`[chao-hang] postUid customer=${customerId} thất bại: ${(err as Error)?.message}`);
   }
 }
+
 
 /** Đếm số khách trong job để cập nhật sent/failed/skipped. */
 async function recomputeCounts(crmJobId: string) {
@@ -214,7 +242,7 @@ async function recomputeCounts(crmJobId: string) {
 
 /** Gửi callback /ket-qua về BOT (partial trong lúc chạy, final khi xong). */
 async function sendKetQua(
-  job: { id: string; botBaseUrl: string; internalKey: string; botJobId: number },
+  job: { id: string; botBaseUrl: string; internalKey: string; botJobId: number; config?: unknown },
   partial: boolean,
 ): Promise<void> {
   const rows = await prisma.chaoHangResult.findMany({
@@ -230,14 +258,24 @@ async function sendKetQua(
     status: r.status,
     error: r.error,
   }));
-  try {
-    await botFetch(job.botBaseUrl, job.internalKey, '/api/chao-hang/ket-qua', {
-      method: 'POST',
-      body: { job_id: job.botJobId, partial, summary: { total: rows.length }, results },
-    });
-    await prisma.chaoHangJob.update({ where: { id: job.id }, data: { lastCallbackAt: new Date() } }).catch(() => {});
-  } catch (err) {
-    logger.warn(`[chao-hang] ket-qua (partial=${partial}) thất bại: ${(err as Error)?.message}`);
+  // 18/09/2026: trước đây callback lỗi chỉ ghi warn rồi BỎ — 4 đợt (PN00483/527/606/628) CRM xong mà BOT
+  // ghi "đang chạy" mãi vì đúng cú callback CUỐI rơi lúc tunnel đứt. Nay: partial vẫn 1 lần (không quan trọng),
+  // FINAL thử lại 5 lần giãn dần (10s → 30s → 60s → 2p → 5p, tổng ~8.5 phút).
+  const delays = partial ? [0] : [0, 10_000, 30_000, 60_000, 120_000, 300_000];
+  const slug = tenantSlugFromConfig(job.config);
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i]) await new Promise((r) => setTimeout(r, delays[i]));
+    try {
+      await botFetch(job.botBaseUrl, job.internalKey, '/api/chao-hang/ket-qua', {
+        method: 'POST',
+        body: { job_id: job.botJobId, partial, summary: { total: rows.length }, results },
+      }, slug);
+      await prisma.chaoHangJob.update({ where: { id: job.id }, data: { lastCallbackAt: new Date() } }).catch(() => {});
+      return;
+    } catch (err) {
+      const last = i === delays.length - 1;
+      logger.warn(`[chao-hang] ket-qua (partial=${partial}) lần ${i + 1}/${delays.length} thất bại: ${(err as Error)?.message}${last ? ' — BỎ CUỘC, BOT phải tự đối chiếu qua GET /jobs/:botJobId' : ''}`);
+    }
   }
 }
 
@@ -295,7 +333,7 @@ async function processJob(crmJobId: string): Promise<void> {
   }
 
   // 1) Lấy recipients + products mới nhất từ BOT.
-  const data = await botFetch(job.botBaseUrl, job.internalKey, `/api/chao-hang/recipients?job_id=${job.botJobId}`, { method: 'GET' });
+  const data = await botFetch(job.botBaseUrl, job.internalKey, `/api/chao-hang/recipients?job_id=${job.botJobId}`, { method: 'GET' }, tenantSlugFromConfig(job.config));
   const recipients: Recipient[] = Array.isArray(data?.recipients) ? data.recipients : [];
   const products: ChaoHangProduct[] = Array.isArray(data?.products)
     ? data.products

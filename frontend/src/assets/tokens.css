@@ -1,28 +1,32 @@
 /* ════════════════════════════════════════════════════════════
+   29/09/2026: bảng màu đổi sang design system của App nội bộ (bot-noi-bo — Blue Light / Nunito):
+   primary #2563EB, nền #F0F7FF, thanh menu navy #1E3A5F, bo góc 8/10/12/16. Tên biến --smax-* giữ nguyên
+   để mọi màn hình đang dùng tự đổi theo. Token riêng kiểu bot-noi-bo: --nb-* (xem noibo-theme.css).
+   ────────────────────────────────────────────────────────────
    Smax design tokens — mirrors frontend/public/chat-smax-v3.html
    Used by DefaultLayout (top nav), ChatView, ContactsView, FriendsView.
    ════════════════════════════════════════════════════════════ */
 :root {
   /* Brand palette */
-  --smax-primary: #2962ff;
-  --smax-primary-hover: #1565c0;
-  --smax-primary-soft: #e3f2fd;
-  --smax-success: #00c853;
-  --smax-warning: #ff9100;
-  --smax-info: #2196f3;
-  --smax-error: #ff3d00;
+  --smax-primary: #2563EB;
+  --smax-primary-hover: #1D4ED8;
+  --smax-primary-soft: #EFF6FF;
+  --smax-success: #10B981;
+  --smax-warning: #F59E0B;
+  --smax-info: #0EA5E9;
+  --smax-error: #EF4444;
 
   /* Grey scale */
-  --smax-grey-50: #fafbfc;
-  --smax-grey-100: #f5f6fa;
-  --smax-grey-200: #ebedf0;
-  --smax-grey-300: #d4d8de;
-  --smax-grey-700: #5a6478;
-  --smax-text: #212121;
+  --smax-grey-50: #F8FBFF;
+  --smax-grey-100: #F0F7FF;
+  --smax-grey-200: #DBEAFE;
+  --smax-grey-300: #BFDBFE;
+  --smax-grey-700: #475569;
+  --smax-text: #0F172A;
 
   /* Surfaces */
   --smax-bg: #ffffff;
-  --smax-header-bg: #1f2330;
+  --smax-header-bg: #1E3A5F;
   --smax-bubble-self: #d0e6ff;
   --smax-group-bg: #ffeae3;
 
@@ -51,10 +55,10 @@
   --smax-line-height: 1.45;
 
   /* Spacing & radii (mockup-derived) */
-  --smax-radius-sm: 4px;
-  --smax-radius-md: 7px;
-  --smax-radius-lg: 9px;
-  --smax-radius-xl: 13px;
+  --smax-radius-sm: 8px;
+  --smax-radius-md: 10px;
+  --smax-radius-lg: 12px;
+  --smax-radius-xl: 16px;
   --smax-topnav-h: 52px;
 }
 

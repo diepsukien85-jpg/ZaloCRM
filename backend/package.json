@@ -15,7 +15,9 @@
     "db:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "drive:setup": "node scripts/drive-oauth-setup.mjs",
+    "media:migrate-from-r2": "tsx scripts/migrate-r2-to-media.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -24,7 +26,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1109.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
     "@fastify/formbody": "^8.0.2",
@@ -39,6 +40,7 @@
     "bullmq": "^5.76.10",
     "exceljs": "^4.4.0",
     "fastify": "^5.8.4",
+    "googleapis": "^181.0.0",
     "image-size": "^2.0.2",
     "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",

@@ -74,6 +74,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
       { id: 'tags', label: 'Tag CRM', icon: '🏷', route: '/settings/crm/tags', permission: 'admin' },
       { id: 'zalo-labels', label: 'Tag Zalo native', icon: '⚑', route: '/settings/crm/zalo-labels', permission: 'admin', aliases: ['zalo label'] },
       { id: 'scoring', label: 'Lead scoring', icon: '📊', route: '/settings/crm/scoring', permission: 'admin', aliases: ['điểm', 'chấm điểm'] },
+      { id: 'ai-auto-reply', label: 'AI tự trả lời', icon: '🤖', route: '/settings/crm/ai-auto-reply', permission: 'admin', aliases: ['ai', 'tự động', 'auto reply', 'kịch bản', 'playbook', 'chatbot'] },
     ],
   },
 
@@ -85,6 +86,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
     permission: 'admin',
     items: [
       { id: 'zalo', label: 'Tài khoản Zalo', icon: '💬', route: '/settings/channels/zalo', permission: 'admin', aliases: ['nick', 'zalo account'] },
+      { id: 'ignored-groups', label: 'Nhóm bỏ qua', icon: '🔕', route: '/settings/channels/ignored-groups', permission: 'admin', aliases: ['nhóm đăng bài', 'bỏ qua', 'ignore', 'group'] },
       { id: 'facebook', label: 'Facebook Lead Ads', icon: '📘', route: '/settings/channels/facebook', permission: 'admin', aliases: ['facebook', 'fb', 'lead ads', 'meta'] },
       { id: 'integrations', label: 'Tích hợp 3rd party', icon: '🔗', route: '/settings/channels/integrations', permission: 'admin' },
     ],

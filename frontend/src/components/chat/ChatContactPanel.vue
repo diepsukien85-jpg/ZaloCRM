@@ -148,17 +148,8 @@
               </div>
             </template>
             <!-- 3 field Email · Địa chỉ · Nghề: ẨN khỏi cột 4 (quick view chat panel).
-                 Schema giữ nguyên — data vẫn lưu/edit qua tab "Hồ sơ KH tổng hợp" (phase sau).
-                 Xem ContactProfileView.vue stub + use-contact-profile.ts composable. -->
-            <button
-              v-if="contact?.id"
-              class="info-fullprofile-link"
-              type="button"
-              :title="'Xem hồ sơ KH tổng hợp (email, địa chỉ, nghề, ...)'"
-              @click="openFullProfile"
-            >
-              <span>✨ Xem hồ sơ KH tổng hợp →</span>
-            </button>
+                 Link "Xem hồ sơ KH tổng hợp" tạm GỠ — ContactProfileView mới là skeleton,
+                 gắn lại khi backend GET /api/v1/contacts/:id/profile + view hoàn thiện. -->
           </template>
         </section>
 
@@ -366,7 +357,6 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
 import type { Contact } from '@/composables/use-contacts';
 import type { AiSentiment } from '@/composables/use-chat';
 import { useChatContactPanel } from '@/composables/use-chat-contact-panel';
@@ -679,15 +669,6 @@ const automationCards = computed<AutomationCard[]>(() => {
 function onAutomationAction(_id: string, _kind: string) { /* TODO wire to API */ }
 function onAttachAutomation() { toast.warning('Gắn automation: chờ backend schema delta'); }
 
-// ════════ Hồ sơ KH tổng hợp (phase sau) ════════
-// Tạm thời chỉ navigate sang route /contacts/:id/profile (skeleton view).
-// Sau khi backend GET /api/v1/contacts/:id/profile sẵn sàng + ContactProfileView
-// implement đầy đủ → tab này hiển thị 3 field Email/Address/Occupation đã ẩn ở cột 4.
-function openFullProfile() {
-  if (!props.contact?.id) return;
-  router.push(`/contacts/${props.contact.id}/profile`);
-}
-
 // MOCK: zaloLabels (per-pair native labels) chưa expose qua API
 const zaloLabels = ref<string[]>([]);
 
@@ -734,7 +715,6 @@ const hasAnyActivity = computed(() =>
 );
 
 const toast = useToast();
-const router = useRouter();
 
 // Khi đổi sang contact mới, reset về tab Hồ sơ + refetch relations
 // (NotesSection tự fetch khi prop contactId đổi).
@@ -1031,30 +1011,6 @@ function relativeTime(dateStr: string) {
   margin-left: 3px;
 }
 
-/* Link Hồ sơ KH tổng hợp — thay thế 3 field email/address/occupation ẩn ở cột 4 */
-.info-fullprofile-link {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  width: calc(100% - 24px);
-  margin: 6px 12px 4px;
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #6366F1;
-  background: #EEF2FF;
-  border: 1px dashed #C7D2FE;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-  font-family: inherit;
-}
-.info-fullprofile-link:hover {
-  background: #E0E7FF;
-  border-color: #818CF8;
-  border-style: solid;
-}
 .ip-form-row {
   display: grid;
   grid-template-columns: 22px 80px 1fr;

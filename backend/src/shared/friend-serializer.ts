@@ -105,7 +105,14 @@ export type FriendRowWithContact = Prisma.FriendGetPayload<{
  * pass FriendRowWithContact → return FriendRowWithContact.
  */
 export function toFriendDto<T extends FriendRow | FriendRowWithContact>(row: T): T {
-  return row;
+  // "Tương tác cuối" (FE đọc lastInteractionAt): không hook nào ghi lastInteractionAt của Friend
+  // → lấy mốc mới nhất trong tin vào / tin ra / tương tác khác (28/09/2026 — trước hiện "chưa nhắn"
+  // cho cả bạn đã nhắn hàng nghìn tin).
+  const r = row as unknown as { lastInteractionAt?: Date | null; lastInboundAt?: Date | null; lastOutboundAt?: Date | null };
+  const times = [r.lastInteractionAt, r.lastInboundAt, r.lastOutboundAt].filter((d): d is Date => d instanceof Date);
+  if (!times.length) return row;
+  const latest = new Date(Math.max(...times.map((d) => d.getTime())));
+  return { ...row, lastInteractionAt: latest };
 }
 
 /**

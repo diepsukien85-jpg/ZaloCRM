@@ -33,8 +33,13 @@ import { ensureBootstrapAdmin } from './modules/auth/ensure-admin.js';
 import { zaloRoutes } from './modules/zalo/zalo-routes.js';
 import { chatRoutes } from './modules/chat/chat-routes.js';
 import { folderRoutes } from './modules/chat/folder-routes.js';
+import { ignoredGroupsRoutes } from './modules/chat/ignored-groups-routes.js';
+import { avatarRefreshRoutes } from './modules/contacts/avatar-refresh-routes.js';
+import { startIgnoredGroupsCache } from './modules/chat/ignored-groups-service.js';
 import { presetRoutes } from './modules/chat/preset-routes.js';
 import { chatAttachmentRoutes } from './modules/chat/chat-attachment-routes.js';
+import { mediaRoutes, mediaAdminRoutes } from './modules/chat/media-routes.js';
+import { startMediaSync } from './shared/storage/media-sync.js';
 import { contactRoutes } from './modules/contacts/contact-routes.js';
 import { statusRoutes } from './modules/contacts/status-routes.js';
 import { contactSubResourceRoutes } from './modules/contacts/contact-sub-resource-routes.js';
@@ -78,6 +83,7 @@ import { groupRoutes } from './modules/zalo/group-routes.js';
 import { groupModerationRoutes } from './modules/zalo/group-moderation-routes.js';
 import { friendRoutes } from './modules/zalo/friend-routes.js';
 import { profileRoutes } from './modules/zalo/profile-routes.js';
+import { campaignRoutes } from './modules/campaign/campaign-routes.js';
 import { credentialRoutes } from './modules/zalo/credential-routes.js';
 import { eventBuffer } from './shared/event-buffer.js';
 // Plugin architecture — xem core/plugin-host.ts
@@ -117,8 +123,12 @@ async function bootstrap() {
   await app.register(rateLimit, {
     max: 500,
     timeWindow: '1 minute',
-    // Skip rate limiting for static assets — only limit API routes
-    allowList: (request: { url: string }) => !request.url.startsWith('/api/'),
+    // Skip rate limiting for static assets — only limit API routes.
+    // /api/v1/media/* cũng được tha: nó là CDN ảnh chat (thay R2 từ 2026-09-22),
+    // mở một hội thoại nhiều ảnh là chục request một lúc, tính vào hạn 500/phút
+    // thì nhân viên đang chat sẽ bị chặn oan.
+    allowList: (request: { url: string }) =>
+      !request.url.startsWith('/api/') || request.url.startsWith('/api/v1/media/'),
   });
 
   await app.register(fastifyMultipart, {
@@ -202,8 +212,12 @@ async function bootstrap() {
   await app.register(zaloRoutes);
   await app.register(chatRoutes);
   await app.register(folderRoutes);
+  await app.register(ignoredGroupsRoutes);
+  await app.register(avatarRefreshRoutes);
   await app.register(presetRoutes);
   await app.register(chatAttachmentRoutes);
+  await app.register(mediaRoutes);
+  await app.register(mediaAdminRoutes);
   await app.register(contactRoutes);
   await app.register(statusRoutes);
   await app.register(contactSubResourceRoutes);
@@ -241,6 +255,8 @@ async function bootstrap() {
   await app.register(groupModerationRoutes);
   await app.register(friendRoutes);
   await app.register(profileRoutes);
+  // Chiến dịch kết bạn + lịch sử thử kết bạn của khách (ContactDetailDialog) — bị rơi mất ở commit revert 7ecdf63.
+  await app.register(campaignRoutes);
   await app.register(credentialRoutes);
 
   // Liveness/readiness probe — also checks DB connectivity
@@ -337,6 +353,8 @@ async function bootstrap() {
     startContactIntelligence();
     startLabelsBackgroundSync(60_000); // realtime-ish 2-way pull every 60s
     startInteractionCron(); // daily silent_30d detection (02:00 VN)
+    // Kho ảnh chat: đối chiếu hai chiều đĩa ↔ Google Drive (thay R2 từ 2026-09-22)
+    startMediaSync();
     // Phase 8 — Engagement heatmap classification (02:30 VN daily)
     const { startEngagementCron } = await import('./modules/engagement/engagement-cron.js');
     startEngagementCron();
@@ -358,10 +376,19 @@ async function bootstrap() {
     const { startScoringScheduler } = await import('./modules/scoring/scoring-scheduler.js');
     startScoringScheduler({ enabled: config.nodeEnv !== 'test' });
     await eventBuffer.start(io);
+    // Nhóm bỏ qua (nhóm đăng bài) — cache in-memory cho listener tra mỗi tin đến.
+    startIgnoredGroupsCache();
     // Phase 7 — Automation engine (event bus + materializer + task worker + 3 action handlers)
     if (config.nodeEnv !== 'test') {
       const { startAutomationEngine } = await import('./modules/automation/engine/index.js');
       startAutomationEngine();
+      // AI tự trả lời 1-1 — bám event bus của engine, chỉ xét hội thoại có thẻ kích hoạt.
+      const { startAiAutoReply } = await import('./modules/ai/auto-reply/auto-reply-service.js');
+      startAiAutoReply();
+      // Bảng daily_message_stats (uptime nick, thời gian phản hồi, hiệu suất nhóm) — trước đây không ai ghi.
+      void import('./modules/analytics/daily-stats-aggregator.js').then((mod) => mod.startDailyStatsAggregator());
+      // Tiểu Mỹ báo cáo 21:00: nhân viên phản hồi khách (theo nick) + AI trả lời Zalo.
+      void import('./modules/analytics/daily-report.js').then((mod) => mod.startDailyReport());
       // Phase F — Broadcast scheduler: poll automation_broadcasts scheduled→running
       const { startBroadcastScheduler } = await import('./modules/automation/broadcasts/broadcast-scheduler.js');
       startBroadcastScheduler();

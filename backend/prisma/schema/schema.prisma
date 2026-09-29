@@ -719,7 +719,8 @@ model CrmTag {
   group CrmTagGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@unique([orgId, name])
-  @@unique([sourceZaloLabelId]) // 1 Zalo label → 1 CrmTag mirror
+  // ID thẻ Zalo chỉ duy nhất trong 1 nick → KHÔNG unique toàn hệ thống (28/09/2026); tag định danh theo (orgId, name).
+  @@index([sourceZaloLabelId])
   @@index([orgId, category])
   @@index([orgId, groupId])
   @@index([managedBy, archivedAt])
@@ -2295,4 +2296,217 @@ model SaleAssignmentState {
   customerList CustomerList @relation(fields: [customerListId], references: [id], onDelete: Cascade)
 
   @@map("sale_assignment_states")
+}
+
+// ── AI tự trả lời khách 1-1 theo thẻ phân loại (2026-09-26) ─────────────────
+// AiAutoReplyConfig: bản dùng chung đầu tiên — KHÔNG còn dùng, giữ lại để không
+// mất dữ liệu; đã chuyển sang AiAutoReplyProfile (riêng từng nick).
+// Chỉ hội thoại 1-1 mà khách mang một trong các thẻ `triggerTags` (Tag CRM hoặc
+// thẻ phân loại Zalo) mới được AI trả lời → không phải gọi AI cho mọi tin đến.
+// Không khai relation Organization (giảm blast radius, giống GroupPostLog).
+model AiAutoReplyConfig {
+  id                          String   @id @default(uuid())
+  orgId                       String   @unique @map("org_id")
+  enabled                     Boolean  @default(false)
+  // 'auto' = AI gửi thẳng cho khách · 'dry_run' = chỉ ghi nhật ký, không gửi
+  mode                        String   @default("auto")
+  triggerTags                 Json     @default("[]") @map("trigger_tags") // string[] tên thẻ
+  accountIds                  Json     @default("[]") @map("account_ids") // string[] — rỗng = mọi nick
+  hourStart                   Int      @default(7) @map("hour_start")
+  hourEnd                     Int      @default(22) @map("hour_end")
+  debounceSeconds             Int      @default(20) @map("debounce_seconds") // gom tin khách nhắn dồn
+  maxRepliesPerDay            Int      @default(300) @map("max_replies_per_day")
+  maxRepliesPerConvPerDay     Int      @default(15) @map("max_replies_per_conv_per_day")
+  skipIfStaffRepliedWithinMin Int      @default(10) @map("skip_if_staff_replied_within_min")
+  blockedKeywords             Json     @default("[]") @map("blocked_keywords")
+  persona                     String?  @db.Text // vai trò + xưng hô, vd "nhân viên CSKH, xưng em gọi anh/chị"
+  extraInstruction            String?  @map("extra_instruction") @db.Text
+  verifyGrounding             Boolean  @default(true) @map("verify_grounding") // lượt AI soát bịa trước khi gửi
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  @@map("ai_auto_reply_configs")
+}
+
+// Cấu hình AI tự trả lời RIÊNG TỪNG NICK (2026-09-26, thay AiAutoReplyConfig
+// dùng chung): mỗi nick một xưng hô, lời dặn, khung giờ, thẻ kích hoạt, trần tin.
+model AiAutoReplyProfile {
+  id                          String   @id @default(uuid())
+  orgId                       String   @map("org_id")
+  zaloAccountId               String   @unique @map("zalo_account_id")
+  enabled                     Boolean  @default(false)
+  mode                        String   @default("dry_run") // auto | dry_run
+  triggerTags                 Json     @default("[]") @map("trigger_tags")
+  hourStart                   Int      @default(7) @map("hour_start")
+  hourEnd                     Int      @default(22) @map("hour_end")
+  debounceSeconds             Int      @default(20) @map("debounce_seconds")
+  maxRepliesPerDay            Int      @default(300) @map("max_replies_per_day") // của nick này
+  maxRepliesPerConvPerDay     Int      @default(15) @map("max_replies_per_conv_per_day")
+  skipIfStaffRepliedWithinMin Int      @default(10) @map("skip_if_staff_replied_within_min")
+  blockedKeywords             Json     @default("[]") @map("blocked_keywords")
+  persona                     String?  @db.Text // cũ — đã gộp vào extraInstruction (hướng dẫn)
+  // Hướng dẫn cho AI (skill): vai trò, xưng hô, cách tư vấn… — viết tay hoặc tải file .md/.txt.
+  extraInstruction            String?  @map("extra_instruction") @db.Text
+  guideFileName               String?  @map("guide_file_name") // tên file skill đã tải lên (nếu có)
+  // Tài liệu tham khảo của skill (references/*.md trong file .skill):
+  // [{ path, content, mode: 'always' | 'auto' | 'off' }] — 'auto' = chỉ nạp khi liên quan câu khách hỏi.
+  guideFiles                  Json     @default("[]") @map("guide_files")
+  // Vòng tự học: rút bài học từ kết quả mỗi lượt trả lời + phản hồi của chủ shop.
+  // Xưng hô theo giới tính Zalo của khách: nữ → gọi "chị", nam → gọi "anh", chưa rõ → "anh/chị".
+  addressByGender             Boolean  @default(true) @map("address_by_gender")
+  selfPronoun                 String   @default("em") @map("self_pronoun") // AI tự xưng
+  // Tra kho bot-noi-bo (giá lẻ/CTV/NPP, tồn, mô tả) để tư vấn cụ thể + gửi ảnh sản phẩm.
+  useProductCatalog           Boolean  @default(true) @map("use_product_catalog")
+  sendProductImages           Boolean  @default(true) @map("send_product_images")
+  // Chuyển người: báo Telegram chủ shop (chat id riêng nick, trống = mặc định server).
+  notifyHandoff               Boolean  @default(true) @map("notify_handoff")
+  handoffChatId               String?  @map("handoff_chat_id")
+  handoffPauseMinutes         Int      @default(60) @map("handoff_pause_minutes") // không báo lại cùng khách trong X phút
+  learningEnabled             Boolean  @default(true) @map("learning_enabled")
+  lastLearnedAt               DateTime? @map("last_learned_at")
+  verifyGrounding             Boolean  @default(true) @map("verify_grounding")
+  // "Học theo nick khác": đã chép hướng dẫn + bài học từ nick mẫu nào, lúc nào (chép xong là của riêng nick này).
+  // Tự phân loại người nhắn 1-1 (thẻ Zalo "Khách Hàng" / "Nhân Viên" / "Người Thân"): AI trả lời khách + nhân viên,
+  // bỏ qua người thân; chưa rõ thì chờ askDelayMinutes rồi hỏi. labelGroups: tên thẻ khác → customer|staff|family|ignore.
+  classifyContacts            Boolean  @default(false) @map("classify_contacts")
+  labelGroups                 Json     @default("{}") @map("label_groups")
+  ownerTitle                  String?  @map("owner_title") // cách gọi chủ nick, vd "anh Mẫn"
+  askDelayMinutes             Int      @default(5) @map("ask_delay_minutes")
+  askTemplate                 String?  @map("ask_template") @db.Text
+  staffGuide                  String?  @map("staff_guide") @db.Text // cách trả lời nhân viên
+  clonedFromAccountId         String?  @map("cloned_from_account_id")
+  clonedAt                    DateTime? @map("cloned_at")
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId])
+  @@map("ai_auto_reply_profiles")
+}
+
+// Kho kịch bản (bộ khung trả lời) — AI chỉ được nêu giá/chính sách từ đây.
+// zaloAccountId null = dùng chung mọi nick; có giá trị = riêng nick đó.
+model AiPlaybookEntry {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  zaloAccountId String? @map("zalo_account_id")
+  title     String
+  category  String?
+  keywords  Json     @default("[]") // khách nhắn trúng → mục được ưu tiên đưa vào prompt
+  content   String   @db.Text
+  priority  Int      @default(0)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId, enabled])
+  @@index([orgId, zaloAccountId])
+  @@map("ai_playbook_entries")
+}
+
+// Nhật ký từng lượt AI xét hội thoại: sent | dry_run | handoff | skipped | error
+model AiAutoReplyLog {
+  id              String   @id @default(uuid())
+  orgId           String   @map("org_id")
+  zaloAccountId   String?  @map("zalo_account_id")
+  conversationId  String   @map("conversation_id")
+  sourceMessageId String?  @map("source_message_id")
+  decision        String
+  reason          String?
+  content         String?  @db.Text
+  latencyMs       Int?     @map("latency_ms")
+  customerText    String?  @map("customer_text") @db.Text // tin khách AI đã trả lời (để học)
+  // Kết quả sau khi trả lời (chấm tự động ~30 phút sau):
+  //   customer_replied | no_reply | staff_intervened | customer_unhappy | staff_answered | no_staff
+  outcome          String?
+  outcomeAt        DateTime? @map("outcome_at")
+  staffFollowup    String?   @map("staff_followup") @db.Text
+  customerFollowup String?   @map("customer_followup") @db.Text
+  // Phản hồi của chủ shop: good | bad (+ câu đúng lẽ ra là)
+  feedback         String?
+  feedbackNote     String?   @map("feedback_note") @db.Text
+  correctedReply   String?   @map("corrected_reply") @db.Text
+  feedbackBy       String?   @map("feedback_by")
+  feedbackAt       DateTime? @map("feedback_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  audience       String   @default("customer") // customer | staff | classify
+  @@index([orgId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([zaloAccountId, createdAt])
+  @@index([outcome, createdAt])
+  @@map("ai_auto_reply_logs")
+}
+
+// Bài học AI tự rút ra cho từng nick (vòng tự học). Chỉ học từ nhân viên và phản
+// hồi của chủ shop — không học theo lời khách (tránh bị khách "dạy" sai).
+model AiLesson {
+  id            String   @id @default(uuid())
+  orgId         String   @map("org_id")
+  zaloAccountId String   @map("zalo_account_id")
+  content       String   @db.Text
+  source        String   @default("daily") // daily | feedback | manual
+  active        Boolean  @default(true)
+  evidence      Json     @default("[]") // id các lượt nhật ký làm căn cứ
+  // Chép từ nick mẫu nào ("Học theo nick khác"); null = bài học của chính nick. Sửa / dạy lại → null.
+  inheritedFromAccountId String? @map("inherited_from_account_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([zaloAccountId, active])
+  @@map("ai_lessons")
+}
+
+// Nhóm Zalo bị bỏ qua (nhóm đăng bài): KHÔNG lưu tin đến/echo vào DB.
+// Theo Zalo group id (dùng chung mọi nick trong nhóm). Gửi bài vào nhóm vẫn chạy.
+model IgnoredGroup {
+  id            String   @id @default(uuid())
+  orgId         String   @map("org_id")
+  groupThreadId String   @map("group_thread_id")
+  groupName     String?  @map("group_name")
+  createdById   String?  @map("created_by_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([orgId, groupThreadId])
+  @@map("ignored_groups")
+}
+
+/// AI phân loại người nhắn 1-1 của 1 hội thoại (Khách Hàng / Nhân Viên / Người Thân / khác).
+model AiContactClass {
+  id             String    @id @default(uuid())
+  orgId          String    @map("org_id")
+  zaloAccountId  String    @map("zalo_account_id")
+  conversationId String    @unique @map("conversation_id")
+  group          String    @default("unknown") // customer | staff | family | other | unknown
+  state          String    @default("classified") // classified | asking | asked | unresolved | owner_cleared
+  source         String? // label | ai | answer
+  confidence     Float?
+  reason         String?
+  labelApplied   Boolean   @default(false) @map("label_applied")
+  askDueAt       DateTime? @map("ask_due_at")
+  askedAt        DateTime? @map("asked_at")
+  answeredAt     DateTime? @map("answered_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([state, askDueAt])
+  @@index([zaloAccountId, updatedAt])
+  @@map("ai_contact_classes")
+}
+
+/// AI chuyển người thật: hội thoại đang mang thẻ "Chờ người thật" (nhớ thẻ cũ để trả lại khi người thật trả lời).
+model AiHandoffHold {
+  id             String    @id @default(uuid())
+  orgId          String    @map("org_id")
+  zaloAccountId  String    @map("zalo_account_id")
+  conversationId String    @map("conversation_id")
+  threadId       String    @map("thread_id")
+  prevLabel      String?   @map("prev_label")
+  reason         String?
+  heldAt         DateTime  @default(now()) @map("held_at")
+  releasedAt     DateTime? @map("released_at")
+  releaseNote    String?   @map("release_note")
+
+  @@index([releasedAt])
+  @@index([conversationId])
+  @@map("ai_handoff_holds")
 }

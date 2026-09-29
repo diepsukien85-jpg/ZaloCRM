@@ -112,6 +112,16 @@ function isMalformedJsonResponseError(err: any): boolean {
   );
 }
 
+// Lỗi mạng CHẬP CHỜN từ phía Zalo (reset TLS / timeout / DNS) — KHÔNG phải lỗi code.
+// Không đưa vào log ERROR (console.error → stderr → *-error.log → Tiểu Linh báo oan);
+// gốc 19/09/2026: getGroupInfo/getUserInfo/getFriendOnlines dump "read ECONNRESET" hàng trăm dòng.
+export function isTransientNetworkError(err: any): boolean {
+  const code = String(err?.code || err?.cause?.code || '');
+  if (/^(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|UND_ERR_)/.test(code)) return true;
+  const msg = String(err?.message || '') + ' ' + String(err?.cause?.message || '');
+  return /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|network error|read ECONN/i.test(msg);
+}
+
 // ── Core execution engine ───────────────────────────────────────────────────
 /**
  * Execute a zca-js operation with all safety layers.
@@ -203,6 +213,9 @@ async function exec<T>(opts: ExecOptions, fn: (api: any) => Promise<T>): Promise
   if (lastError instanceof ZaloOpError) throw lastError;
   if (opts.suppressErrorLog?.(lastError)) {
     logger.debug(`[zalo-ops:${accountId}] ${operation} skipped noisy SDK error:`, lastError?.message ?? lastError);
+  } else if (isTransientNetworkError(lastError)) {
+    // Mạng chập chờn từ Zalo — chỉ debug (stdout), không vào *-error.log; vẫn throw để caller xử lý.
+    logger.debug(`[zalo-ops:${accountId}] ${operation} lỗi mạng chập chờn (${lastError?.cause?.code || lastError?.code || 'net'})`);
   } else {
     logger.error(`[zalo-ops:${accountId}] ${operation} failed:`, lastError);
   }
@@ -580,7 +593,15 @@ async function cancelFriendRequest(accountId: string, userId: string) {
 }
 
 async function getSentFriendRequests(accountId: string) {
-  return exec({ accountId, category: 'friend_read', operation: 'getSentFriendRequests' },
+  return exec(
+    {
+      accountId,
+      category: 'friend_read',
+      operation: 'getSentFriendRequests',
+      // 18/09/2026: [zalo:112] ở lệnh này là nick không được Zalo cho xem lời mời đã gửi (Minmy Luxury) —
+      // lỗi bền, caller đã xử lý (bỏ qua bước). Không in ERROR + stack mỗi 15 phút nữa.
+      suppressErrorLog: (err) => err?.code === 112,
+    },
     (api) => api.getSentFriendRequest());
 }
 
@@ -637,7 +658,8 @@ async function getOwnId(accountId: string) {
 
 async function getAccountInfo(accountId: string) {
   return exec({ accountId, category: 'profile', operation: 'getAccountInfo' },
-    (api) => api.getAccountInfo());
+    // zca-js 2.x: fetchAccountInfo() → { profile } (getAccountInfo không còn) — trả profile như trước.
+    async (api) => { const r = await api.fetchAccountInfo(); return r?.profile ?? r; });
 }
 
 async function changeAccountAvatar(accountId: string, filePath: string) {
@@ -647,7 +669,8 @@ async function changeAccountAvatar(accountId: string, filePath: string) {
 
 async function setOnlineStatus(accountId: string, online: boolean) {
   return exec({ accountId, category: 'profile', operation: 'setOnlineStatus' },
-    (api) => api.setOnlineStatus(online));
+    // zca-js 2.x: updateActiveStatus(active) (setOnlineStatus không còn).
+    (api) => api.updateActiveStatus(online));
 }
 
 async function getLastOnline(accountId: string, userId: string) {

@@ -194,96 +194,45 @@ export async function syncLabelsForAccount(
       update: { name: groupName }, // rename khi displayName/phone đổi
     });
 
-    // Upsert CrmTag per label — 3-step để xử lý legacy data từ PR2:
-    //  1. Find theo sourceZaloLabelId (PR3+ rows) → update
-    //  2. Else find theo (orgId, name) (legacy PR2 rows hoặc orphan) → claim + update fields
-    //  3. Else create mới
-    // Tránh upsert(where=sourceZaloLabelId) hit create branch khi legacy có same name
-    // → fail unique constraint (orgId, name).
+    // Upsert CrmTag theo TÊN "🔵 <tên thẻ>" (Tag CRM là của cả tổ chức, duy nhất theo tên).
+    // 28/09/2026: trước đây tra theo sourceZaloLabelId (duy nhất toàn hệ thống) — nhưng ID thẻ Zalo chỉ duy
+    // nhất TRONG 1 nick (nick nào cũng có thẻ ID 1..6) → các nick giành nhau 1 dòng tag, đổi tên qua lại,
+    // 15 thẻ không bao giờ có Tag CRM (642 lỗi unique mỗi đợt). Thẻ trùng tên ở nhiều nick dùng chung 1 tag;
+    // nhóm (groupId) giữ theo nick tạo ra tag đầu tiên.
     for (const l of upserted) {
       const tagName = `🔵 ${l.text}`;
-      const baseData = {
-        color: l.color || '#1976D2',
-        emoji: l.emoji || null,
-        groupId: group.id,
-        category: groupName,
-        managedBy: 'zalo_sync',
-        sourceZaloLabelId: l.zaloLabelId,
-        description: `Auto-sync từ Zalo label ID ${l.zaloLabelId}`,
-        archivedAt: null,
-      };
-
-      const bySource = await prisma.crmTag.findUnique({
-        where: { sourceZaloLabelId: l.zaloLabelId },
-      });
-      if (bySource) {
-        try {
-          await prisma.crmTag.update({
-            where: { id: bySource.id },
-            data: { name: tagName, ...baseData },
-          });
-        } catch (err: any) {
-          // Race: another sync claimed (orgId, name) trong khi mình tính update
-          // → skip, row đã được đồng bộ bởi caller khác.
-          if (err?.code !== 'P2002') throw err;
-        }
+      const style = { color: l.color || '#1976D2', emoji: l.emoji || null, managedBy: 'zalo_sync', archivedAt: null };
+      const existing = await prisma.crmTag.findUnique({ where: { orgId_name: { orgId, name: tagName } } });
+      if (existing) {
+        const mine = !existing.groupId || existing.groupId === group.id;
+        await prisma.crmTag.update({
+          where: { id: existing.id },
+          data: mine
+            ? { ...style, groupId: group.id, category: groupName, sourceZaloLabelId: l.zaloLabelId, description: `Auto-sync từ Zalo label ID ${l.zaloLabelId}` }
+            : style,
+        });
         continue;
       }
-
-      const byName = await prisma.crmTag.findUnique({
-        where: { orgId_name: { orgId, name: tagName } },
-      });
-      if (byName) {
-        // Claim legacy row (sourceZaloLabelId=null từ PR2) → upgrade managedBy
-        try {
-          await prisma.crmTag.update({
-            where: { id: byName.id },
-            data: baseData,
-          });
-        } catch (err: any) {
-          // Race: another sync vừa set sourceZaloLabelId cho row này → skip
-          if (err?.code !== 'P2002') throw err;
-        }
-        continue;
-      }
-
-      // Race-condition safe: 2 concurrent sync requests cho cùng 1 label
-      // có thể cả 2 cùng pass bySource=null + byName=null. Khi create lần 2
-      // sẽ hit P2002 unique(orgId, name) hoặc unique(sourceZaloLabelId).
-      // Fix: catch P2002 → retry find + update thay vì error toàn bộ sync.
       try {
         await prisma.crmTag.create({
-          data: { orgId, name: tagName, ...baseData },
+          data: {
+            orgId, name: tagName, ...style, groupId: group.id, category: groupName,
+            sourceZaloLabelId: l.zaloLabelId, description: `Auto-sync từ Zalo label ID ${l.zaloLabelId}`,
+          },
         });
       } catch (err: any) {
-        if (err?.code === 'P2002') {
-          const winnerBySrc = await prisma.crmTag.findUnique({
-            where: { sourceZaloLabelId: l.zaloLabelId },
-          });
-          const winnerByName = winnerBySrc
-            ? null
-            : await prisma.crmTag.findUnique({ where: { orgId_name: { orgId, name: tagName } } });
-          const winner = winnerBySrc ?? winnerByName;
-          if (winner) {
-            await prisma.crmTag.update({
-              where: { id: winner.id },
-              data: { name: tagName, ...baseData },
-            });
-          }
-        } else {
-          throw err;
-        }
+        if (err?.code !== 'P2002') throw err; // 2 lượt đồng bộ cùng lúc tạo trùng → lượt kia đã tạo, bỏ qua
       }
     }
 
-    // Archive CrmTag tương ứng với label bị xoá (không còn trong upserted set)
-    const currentLabelIds = upserted.map(l => l.zaloLabelId);
+    // Archive tag của nick này mà thẻ Zalo tương ứng đã bị xoá (so theo tên).
+    const currentNames = upserted.map(l => `🔵 ${l.text}`);
     await prisma.crmTag.updateMany({
       where: {
         orgId,
         managedBy: 'zalo_sync',
         groupId: group.id,
-        sourceZaloLabelId: { notIn: currentLabelIds.length ? currentLabelIds : [-1] },
+        name: { notIn: currentNames.length ? currentNames : ['__none__'] },
         archivedAt: null,
       },
       data: { archivedAt: new Date() },

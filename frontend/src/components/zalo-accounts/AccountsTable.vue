@@ -131,9 +131,9 @@
             <span v-else class="muted-italic">—</span>
           </td>
           <td>
-            <div class="progress" :class="progressClass(acct.msgToday, acct.quota)">
-              <span class="vals">{{ acct.msgToday }}/{{ acct.quota }}</span>
-              <div class="bar"><i :style="{ width: progressPct(acct.msgToday, acct.quota) + '%' }"></i></div>
+            <div class="progress" :class="progressClass(acct.msgSentToday ?? acct.msgToday, acct.quota)" :title="`Đã gửi ${acct.msgSentToday ?? acct.msgToday} / hạn mức ${acct.quota} · nhận ${acct.msgToday - (acct.msgSentToday ?? 0)}`">
+              <span class="vals">{{ acct.msgSentToday ?? acct.msgToday }}/{{ acct.quota }}</span>
+              <div class="bar"><i :style="{ width: progressPct(acct.msgSentToday ?? acct.msgToday, acct.quota) + '%' }"></i></div>
             </div>
           </td>
           <td>
@@ -363,7 +363,7 @@ function maskPhone(p: string): string {
   background: #FFFFFF;
   border: 1px solid #F3F4F6;
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: auto; /* màn hình hẹp: cuộn ngang bảng thay vì cắt cột */
 }
 .accounts-table {
   width: 100%;

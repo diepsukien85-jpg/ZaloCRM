@@ -10,7 +10,8 @@
     <!-- Header -->
     <div class="d-flex align-center pa-3 border-b">
       <v-avatar color="primary" size="40" class="mr-3">
-        <v-icon>mdi-account-group</v-icon>
+        <v-img v-if="group.avt" :src="group.avt" />
+        <v-icon v-else>mdi-account-group</v-icon>
       </v-avatar>
       <div class="flex-1-1">
         <div class="text-subtitle-1 font-weight-medium">
@@ -90,7 +91,9 @@
         <div v-else-if="loading" class="d-flex justify-center pa-6">
           <v-progress-circular indeterminate color="primary" size="28" />
         </div>
-        <div v-else class="text-center text-grey pa-6 text-body-2">Chưa có thành viên</div>
+        <div v-else class="text-center text-grey pa-6 text-body-2">
+          {{ group.totalMember ? `Zalo chưa trả danh sách ${group.totalMember} thành viên của nhóm này` : 'Chưa có thành viên' }}
+        </div>
       </v-window-item>
 
       <!-- Pending tab -->
