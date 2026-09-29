@@ -1,143 +1,103 @@
 <template>
-  <v-app class="smax-app">
-    <!-- ════════ TOP NAV (Smax-style dark, h=52px) ════════ -->
-    <header class="smax-topnav">
-      <!-- Logo + Workspace selector -->
-      <RouterLink to="/" class="logo" title="ZaloCRM">
-        <img src="/brand/zalocrm-logo.png" alt="ZaloCRM" />
-      </RouterLink>
-
-      <div class="workspace workspace--static">
-        <span class="ws-logo">{{ workspaceShort }}</span>
-        <span>{{ workspaceName }}</span>
+  <v-app class="smax-app nb-app">
+    <!-- ════════ MENU DỌC (đồng bộ App nội bộ: navy, có nhóm, thu gọn được) ════════ -->
+    <v-navigation-drawer
+      permanent
+      :rail="collapsed"
+      :width="248"
+      :rail-width="68"
+      class="nb-sidebar"
+      :class="{ 'nb-sidebar--rail': collapsed }"
+    >
+      <div class="nb-sidebar-header">
+        <RouterLink to="/" class="nb-logo" title="ZaloCRM">
+          <span class="nb-logo-icon"><img src="/brand/zalocrm-logo.png" alt="" /></span>
+          <span v-if="!collapsed" class="nb-logo-text">Zalo<b>CRM</b></span>
+        </RouterLink>
+        <button
+          v-if="!collapsed"
+          class="nb-collapse-btn"
+          type="button"
+          title="Thu gọn menu"
+          aria-label="Thu gọn menu"
+          @click="toggleCollapsed"
+        >
+          <v-icon size="18">mdi-chevron-double-left</v-icon>
+        </button>
       </div>
+      <button
+        v-if="collapsed"
+        class="nb-expand-btn"
+        type="button"
+        title="Mở rộng menu"
+        aria-label="Mở rộng menu"
+        @click="toggleCollapsed"
+      >
+        <v-icon size="18">mdi-chevron-double-right</v-icon>
+      </button>
 
-      <!-- Primary nav tabs (Excel structure). nav-wrap cắt phần thừa; số tab hiển thị
-           do JS tính theo chiều rộng khả dụng, tab không vừa → gom vào menu "Thêm ▾". -->
-      <div ref="navWrapRef" class="nav-wrap">
-        <nav ref="navTabsRef" class="nav-tabs">
+      <nav class="nb-nav" aria-label="Menu chính">
+        <template v-for="(group, gi) in NAV_GROUPS" :key="gi">
+          <div v-if="group.label && !collapsed" class="nb-nav-label">{{ group.label }}</div>
+          <div v-else-if="group.label" class="nb-nav-divider" />
           <RouterLink
-            v-for="tab in visibleTabs"
-            :key="tab.path"
-            :to="tab.path"
-            class="nav-tab"
-            :class="{ active: isActive(tab) }"
+            v-for="item in group.items"
+            :key="item.path"
+            :to="item.path"
+            class="nb-nav-item"
+            :class="{ active: isNavActive(item, route.path) }"
+            :title="collapsed ? item.label : undefined"
           >
-            <span class="ic">{{ tab.icon }}</span>{{ tab.label }}
+            <v-icon size="20" class="nb-nav-ic">{{ item.icon }}</v-icon>
+            <span v-if="!collapsed" class="nb-nav-text">{{ item.label }}</span>
           </RouterLink>
+        </template>
+      </nav>
 
-          <!-- Overflow: các tab không vừa chiều ngang dồn vào đây -->
-          <v-menu v-if="overflowTabs.length" open-on-hover>
-            <template #activator="{ props: act }">
-              <button class="nav-tab" :class="{ active: overflowTabs.some(isActive) }" v-bind="act">
-                <span class="ic">⋯</span>Thêm<span class="caret">▾</span>
-              </button>
-            </template>
-            <v-list density="compact" min-width="200">
-              <v-list-item
-                v-for="tab in overflowTabs"
-                :key="tab.path"
-                :to="tab.path"
-                :title="tab.label"
-                :active="isActive(tab)"
-              >
-                <template #prepend><span class="overflow-ic">{{ tab.icon }}</span></template>
-              </v-list-item>
-            </v-list>
-          </v-menu>
-        </nav>
-      </div>
-
-      <!-- Trailing dropdowns (luôn hiển thị, không bị overflow) -->
-      <div class="nav-trailing">
-        <!-- Legacy automation dropdown (kept for backward compat — Phase 7 Bot-Auto
-             is now a top-level primary tab via primaryTabs array above) -->
-        <v-menu open-on-hover>
+      <template #append>
+        <v-menu location="end bottom" offset="8">
           <template #activator="{ props: act }">
-            <button
-              class="nav-tab"
-              :class="{ active: isLegacyAutomationActive }"
-              v-bind="act"
-            >
-              <span class="ic">⚡</span>Automation<span class="caret">▾</span>
+            <button class="nb-user" type="button" v-bind="act" :title="authStore.user?.fullName || 'Tài khoản'">
+              <span class="nb-user-avatar">{{ initials }}</span>
+              <span v-if="!collapsed" class="nb-user-info">
+                <span class="nb-user-name">{{ authStore.user?.fullName || 'Tài khoản' }}</span>
+                <span class="nb-user-role">{{ roleLabel }}</span>
+              </span>
+              <v-icon v-if="!collapsed" size="16" class="nb-user-caret">mdi-dots-vertical</v-icon>
             </button>
           </template>
           <v-list density="compact" min-width="220">
-            <v-list-item to="/automation" title="Rules &amp; Templates (legacy)" prepend-icon="mdi-chart-box-outline" />
-          </v-list>
-        </v-menu>
-
-        <v-menu open-on-hover>
-          <template #activator="{ props: act }">
-            <button class="nav-tab" :class="{ active: isSettingsActive }" v-bind="act">
-              <span class="ic">⚙</span>Cài đặt<span class="caret">▾</span>
-            </button>
-          </template>
-          <v-list density="compact" min-width="240">
+            <v-list-item :title="authStore.user?.fullName || ''" :subtitle="authStore.user?.email || ''" />
+            <v-divider class="my-1" />
             <v-list-item to="/settings/personal/profile" title="Hồ sơ của tôi" prepend-icon="mdi-account-circle-outline" />
-            <v-divider />
-            <v-list-subheader>Tổ chức &amp; Nhân sự</v-list-subheader>
-            <v-list-item to="/settings/team/users" title="Nhân viên" prepend-icon="mdi-account-cog-outline" />
-            <v-list-item to="/settings/team/teams" title="Đội nhóm" prepend-icon="mdi-account-group-outline" />
-            <v-list-item to="/settings/team/roles" title="Vai trò &amp; Phân quyền" prepend-icon="mdi-shield-account-outline" />
-            <v-divider />
-            <v-list-subheader>CRM &amp; Kênh</v-list-subheader>
-            <v-list-item to="/settings/crm/tags" title="Tag CRM" prepend-icon="mdi-tag-multiple-outline" />
-            <v-list-item to="/settings/crm/scoring" title="Lead scoring" prepend-icon="mdi-chart-line" />
-            <v-list-item to="/settings/crm/ai-auto-reply" title="AI tự trả lời" prepend-icon="mdi-robot-outline" />
-            <v-list-item to="/settings/channels/zalo" title="Tài khoản Zalo" prepend-icon="mdi-cellphone-link" />
-            <v-list-item to="/settings/channels/ignored-groups" title="Nhóm bỏ qua" prepend-icon="mdi-bell-off-outline" />
-            <v-list-item to="/settings/channels/integrations" title="Tích hợp" prepend-icon="mdi-connection" />
-            <v-divider />
-            <v-list-item to="/settings/dev/api" title="API &amp; Webhook" prepend-icon="mdi-api" />
-            <v-divider />
-            <v-list-item to="/settings" title="📋 Xem tất cả cài đặt" prepend-icon="mdi-cog-outline" />
+            <v-list-item to="/profile" title="Hồ sơ nick Zalo" prepend-icon="mdi-card-account-details-outline" />
+            <v-divider class="my-1" />
+            <v-list-item title="Đăng xuất" prepend-icon="mdi-logout" base-color="error" @click="logout" />
           </v-list>
         </v-menu>
-      </div>
+      </template>
+    </v-navigation-drawer>
 
-      <!-- Flexible spacer pushes everything after it to the right edge. -->
-      <div ref="spacerRef" class="topnav-spacer" />
-
+    <!-- ════════ THANH TRÊN (mỏng, trắng) ════════ -->
+    <v-app-bar flat :height="52" class="nb-topbar">
+      <div class="nb-topbar-title">{{ pageTitle }}</div>
+      <div class="nb-topbar-spacer" />
       <!--
         ATTRIBUTION BANNER — moved into DashboardView per copyright holder
         (dmman16pn@gmail.com). Rendering still required by Apache 2.0 §4(d);
         see src/views/DashboardView.vue and src/composables/use-attribution.ts.
       -->
-
-      <!-- Global search trigger -->
-      <GlobalSearch class="topnav-search" />
-
-      <!-- Right icon buttons -->
-      <RouterLink to="/groups" class="icon-btn" title="Nhóm">
-        <v-icon size="18">mdi-account-group-outline</v-icon>
-      </RouterLink>
-
+      <GlobalSearch class="nb-topbar-search" />
       <!-- Điểm mở rộng UI: plugin có thể chèn action vào topbar. Rỗng nếu không có plugin. -->
       <ExtensionSlot name="topbar.actions" />
-
-      <NotificationBell class="icon-btn-wrap" />
-
-      <v-menu>
-        <template #activator="{ props: act }">
-          <button class="user-avatar" v-bind="act" :title="authStore.user?.fullName || 'Tài khoản'">
-            {{ initials }}
-          </button>
-        </template>
-        <v-list density="compact" min-width="200">
-          <v-list-item :title="authStore.user?.fullName || ''" :subtitle="authStore.user?.email || ''" />
-          <v-divider />
-          <v-list-item to="/profile" title="Hồ sơ" prepend-icon="mdi-account-circle-outline" />
-          <v-list-item @click="toggleTheme" :title="isDark ? 'Theme sáng' : 'Theme tối (legacy)'" :prepend-icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'" />
-          <v-divider />
-          <v-list-item @click="logout" title="Đăng xuất" prepend-icon="mdi-logout" />
-        </v-list>
-      </v-menu>
-    </header>
+      <NotificationBell class="nb-icon-btn-wrap" />
+    </v-app-bar>
 
     <!-- ════════ MAIN ════════ -->
-    <v-main class="smax-main">
-      <slot />
+    <v-main class="smax-main nb-main">
+      <div :key="route.path.split('/')[1] || 'home'" class="nb-page-enter nb-page" :class="{ 'nb-page--padded': padded }">
+        <slot />
+      </div>
     </v-main>
 
     <!-- Popup nổi: hỏi AI về tình trạng khách hàng hôm nay -->
@@ -149,143 +109,60 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useTheme } from 'vuetify';
-import { useRoute, RouterLink } from 'vue-router';
+import { useRoute, useRouter, RouterLink } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { useRouter } from 'vue-router';
 import NotificationBell from '@/components/NotificationBell.vue';
 import GlobalSearch from '@/components/GlobalSearch.vue';
 import ToastContainer from '@/components/ui/ToastContainer.vue';
 import ExtensionSlot from '@/components/ExtensionSlot.vue';
 import AiDailyBriefPopup from '@/components/ai/ai-daily-brief-popup.vue';
+import { NAV_GROUPS, isNavActive, activeNavLabel } from '@/constants/nav-menu';
+
 const theme = useTheme();
 const route = useRoute();
-const authStore = useAuthStore();
 const router = useRouter();
+const authStore = useAuthStore();
 
-const isDark = ref((localStorage.getItem('theme') || 'smax-light') === 'legacy-dark');
-
+// Chỉ giao diện sáng (App nội bộ không có giao diện tối). Xoá lựa chọn tối cũ nếu còn lưu.
 onMounted(() => {
-  const saved = localStorage.getItem('theme') || 'smax-light';
-  theme.global.name.value = saved;
-  isDark.value = saved === 'legacy-dark';
+  theme.global.name.value = 'smax-light';
+  try { localStorage.setItem('theme', 'smax-light'); } catch { /* bỏ qua */ }
 });
 
-interface NavTab {
-  path: string;
-  label: string;
-  icon: string;
-  matchPrefix?: string;
+// Menu thu gọn: nhớ lựa chọn; lần đầu tự thu gọn nếu màn hình < 1400px (trang Tin nhắn cần chỗ).
+// Màn hình < 1200px luôn thu gọn (menu mở rộng làm các trang nhiều cột bị chật).
+const COLLAPSE_KEY = 'nb-sidebar-collapsed';
+function initialCollapsed(): boolean {
+  if (window.innerWidth < 1200) return true;
+  try {
+    const saved = localStorage.getItem(COLLAPSE_KEY);
+    if (saved !== null) return saved === '1';
+  } catch { /* bỏ qua */ }
+  return window.innerWidth < 1400;
+}
+const collapsed = ref(initialCollapsed());
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value;
+  try { localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0'); } catch { /* bỏ qua */ }
 }
 
-// Excel-driven menu (cấp 1) — Automation/Cài đặt được render riêng với dropdown.
-// Bot-Auto (Phase 7) là tab top-level riêng (giống smax.ai), tách hẳn khỏi
-// legacy Automation dropdown để user không bị nhầm 2 hệ thống.
-const primaryTabs: NavTab[] = [
-  { path: '/',                       label: 'Dashboard',   icon: '🏠', matchPrefix: '/$' },
-  { path: '/chat',                   label: 'Tin nhắn',    icon: '💬' },
-  { path: '/friends',                label: 'Bạn bè',      icon: '👥' },
-  { path: '/contacts',               label: 'Khách hàng',  icon: '🧑' },
-  { path: '/leads/stuck',            label: 'KH đình trệ', icon: '🚨' },
-  { path: '/appointments',           label: 'Lịch hẹn',    icon: '📅' },
-  { path: '/automation/bot/triggers', label: 'Bot-Auto',   icon: '🤖', matchPrefix: '/automation/bot' },
-  { path: '/analytics',              label: 'Phân tích',   icon: '📈' },
-  { path: '/reports',                label: 'Báo cáo',     icon: '📊' },
-  { path: '/group-posts',            label: 'Đăng nhóm',   icon: '📢' },
-  { path: '/chao-hang',              label: 'Chào hàng',   icon: '🛍️' },
-];
+const pageTitle = computed(() => activeNavLabel(route.path) || 'ZaloCRM');
+// Trang không tự canh lề (nội dung dính sát menu / mép phải) → layout thêm lề.
+const PADDED = ['/automation', '/analytics', '/reports', '/profile'];
+const padded = computed(() => PADDED.some((p) => route.path === p || (p !== '/automation' && route.path.startsWith(p + '/'))));
 
-function isActive(tab: NavTab): boolean {
-  if (tab.matchPrefix === '/$') return route.path === '/';
-  if (tab.matchPrefix) {
-    return route.path === tab.matchPrefix || route.path.startsWith(tab.matchPrefix + '/');
-  }
-  return route.path === tab.path || route.path.startsWith(tab.path + '/');
-}
-const isSettingsActive = computed(() =>
-  route.path === '/settings' || route.path.startsWith('/settings/'),
-);
-// Highlight legacy Automation dropdown ONLY when on /automation (exact) — do NOT
-// activate when on /automation/bot/* (that's the top-level Bot-Auto tab).
-const isLegacyAutomationActive = computed(
-  () => route.path === '/automation' || (route.path.startsWith('/automation') && !route.path.startsWith('/automation/bot')),
-);
-
-// ── Responsive overflow: tab nào không vừa chiều ngang → dồn vào menu "Thêm ▾" ──
-// Đo chiều rộng tự nhiên của từng tab MỘT LẦN (lúc render đầy đủ), rồi tính số tab
-// vừa khít theo chiều rộng vùng nav hiện tại; phần dư hiển thị trong dropdown.
-const navWrapRef = ref<HTMLElement | null>(null);
-const navTabsRef = ref<HTMLElement | null>(null);
-const spacerRef = ref<HTMLElement | null>(null);
-const tabWidths = ref<number[]>([]);
-const containerW = ref(0);
-
-const visibleCount = computed(() => {
-  const widths = tabWidths.value;
-  const avail = containerW.value;
-  if (!widths.length || !avail) return primaryTabs.length; // chưa đo → render đủ
-  const GAP = 2, SAFE = 6, THEM_W = 64; // nút "Thêm" ~64px
-  let total = SAFE;
-  for (const w of widths) total += w + GAP;
-  if (total <= avail) return primaryTabs.length; // vừa hết, không cần "Thêm"
-  let used = SAFE + THEM_W;
-  let count = 0;
-  for (const w of widths) {
-    if (used + w + GAP > avail) break;
-    used += w + GAP;
-    count++;
-  }
-  return Math.max(1, count); // luôn chừa ít nhất 1 tab
-});
-const visibleTabs = computed(() => primaryTabs.slice(0, visibleCount.value));
-const overflowTabs = computed(() => primaryTabs.slice(visibleCount.value));
-
-function measureTabs() {
-  const el = navTabsRef.value;
-  if (!el) return;
-  const ws: number[] = [];
-  el.querySelectorAll('.nav-tab').forEach((n) => ws.push((n as HTMLElement).offsetWidth));
-  // Chỉ ghi khi đo được TOÀN BỘ tập tab (lúc chưa cắt) — tránh ghi đè bằng tập đã cắt.
-  if (ws.length >= primaryTabs.length) tabWidths.value = ws.slice(0, primaryTabs.length);
-}
-// Chiều rộng KHẢ DỤNG cho dải tab = nav-wrap + spacer (bất biến: cắt tab thì nav-wrap
-// co lại, spacer giãn ra → tổng không đổi) → tránh vòng lặp dao động khi cắt/thêm.
-function updateContainer() {
-  const wrap = navWrapRef.value?.clientWidth ?? 0;
-  const slack = spacerRef.value?.clientWidth ?? 0;
-  containerW.value = wrap + slack;
-}
-
-let ro: ResizeObserver | null = null;
-onMounted(() => {
-  nextTick(() => {
-    measureTabs();
-    updateContainer();
-  });
-  ro = new ResizeObserver(() => updateContainer());
-  if (navWrapRef.value) ro.observe(navWrapRef.value);
-  if (spacerRef.value) ro.observe(spacerRef.value);
-});
-onBeforeUnmount(() => ro?.disconnect());
-
-// Workspace — placeholder single-tenant cho Phase 1
-const workspaceName = computed(() => authStore.user?.fullName?.split(' ')[0] || 'hsholding');
-const workspaceShort = computed(() =>
-  workspaceName.value.slice(0, 2).toUpperCase(),
-);
+// Mục menu đang chọn luôn nằm trong vùng nhìn thấy (menu dài hơn màn hình thấp).
+watch(() => route.path, () => nextTick(() => {
+  document.querySelector('.nb-nav-item.active')?.scrollIntoView({ block: 'nearest' });
+}), { immediate: true });
 
 const initials = computed(() => {
   const name = authStore.user?.fullName || 'U';
-  return name.split(' ').map(p => p[0]).slice(-2).join('').toUpperCase();
+  return name.split(' ').map((p) => p[0]).slice(-2).join('').toUpperCase();
 });
-
-function toggleTheme() {
-  const next = isDark.value ? 'smax-light' : 'legacy-dark';
-  isDark.value = !isDark.value;
-  theme.global.name.value = next;
-  localStorage.setItem('theme', next);
-}
+const roleLabel = computed(() => ({ owner: 'Chủ tổ chức', admin: 'Quản trị', member: 'Nhân viên' } as Record<string, string>)[authStore.user?.role || ''] || authStore.user?.role || '');
 
 function logout() {
   authStore.logout();
@@ -294,195 +171,107 @@ function logout() {
 </script>
 
 <style scoped>
-.smax-topnav {
-  background: var(--smax-header-bg);
-  color: white;
-  height: var(--smax-topnav-h);
-  display: flex; align-items: center;
-  padding: 0 13px; gap: 4px;
-  flex-shrink: 0;
-  position: sticky; top: 0; z-index: 100;
+/* ── Menu dọc ── */
+.nb-sidebar {
+  background: var(--nb-sidebar) !important;
+  color: var(--nb-sidebar-text) !important;
+  border: none !important;
 }
-
-.logo {
-  width: 35px; height: 35px;
-  background: white; border-radius: 7px;
+.nb-sidebar :deep(.v-navigation-drawer__content) { display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+.nb-sidebar-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 16px 14px 12px;
+}
+.nb-logo { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; text-decoration: none; color: #fff; }
+.nb-logo-icon {
+  width: 40px; height: 40px; flex-shrink: 0;
+  border-radius: var(--nb-radius-md);
+  background: linear-gradient(135deg, var(--nb-primary), var(--nb-accent));
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+  display: flex; align-items: center; justify-content: center; padding: 5px;
+}
+.nb-logo-icon img { width: 100%; height: 100%; object-fit: contain; background: #fff; border-radius: 7px; }
+.nb-logo-text { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; white-space: nowrap; }
+.nb-logo-text b { color: #93C5FD; font-weight: 800; }
+.nb-collapse-btn, .nb-expand-btn {
+  background: none; border: none; cursor: pointer;
+  color: rgba(203, 213, 225, 0.6);
+  border-radius: 6px; padding: 6px;
   display: flex; align-items: center; justify-content: center;
-  margin-right: 4px;
-  text-decoration: none;
-  overflow: hidden;
-  padding: 2px;
+  transition: all 0.15s;
 }
-.logo img {
-  width: 100%; height: 100%;
-  object-fit: contain;
-}
+.nb-collapse-btn:hover, .nb-expand-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.nb-expand-btn { margin: 0 auto 4px; }
 
-.workspace {
-  background: rgba(255,255,255,0.06);
-  border: none;
-  display: flex; align-items: center; gap: 7px;
-  padding: 7px 11px; border-radius: 7px;
-  margin-right: 13px;
-  cursor: pointer; color: white;
-  font-size: 13px;
+.nb-nav { padding: 4px 10px 12px; flex: 1; }
+.nb-nav-label {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+  color: rgba(203, 213, 225, 0.5);
+  padding: 10px 10px 4px;
 }
-.workspace:hover { background: rgba(255,255,255,0.10); }
-.workspace--static { cursor: default; }
-.workspace--static:hover { background: rgba(255,255,255,0.06); }
-.ws-logo {
-  width: 24px; height: 24px;
-  background: linear-gradient(135deg, #ff5722, #d84315);
-  border-radius: 5px;
-  display: flex; align-items: center; justify-content: center;
-  color: white; font-size: 11px; font-weight: 600;
-}
-.opacity-50 { opacity: 0.5; }
-
-/* nav-wrap chiếm hết khoảng trống còn lại + cắt phần thừa; số tab hiển thị do JS
-   tính theo chiều rộng, phần dư nằm trong menu "Thêm" → KHÔNG bao giờ tràn. */
-.nav-wrap {
-  flex: 0 1 auto; min-width: 0;
-  overflow: hidden;
-  display: flex; align-items: center;
-}
-.nav-trailing {
-  display: flex; align-items: center; gap: 2px;
-  flex-shrink: 0;
-}
-.nav-tabs {
-  display: flex; align-items: center; gap: 2px;
-  flex-wrap: nowrap;
-}
-.overflow-ic { font-size: 15px; margin-right: 4px; }
-.nav-tab {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 9px 13px; border-radius: 7px;
-  cursor: pointer;
-  color: rgba(255,255,255,0.75);
-  font-size: 13px;
-  background: transparent; border: none;
+.nb-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 10px 8px; }
+.nb-nav-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 7px 12px; margin-bottom: 1px;
+  border-radius: var(--nb-radius-sm);
+  color: var(--nb-sidebar-text);
+  text-decoration: none; font-size: 14px; font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
   white-space: nowrap;
-  text-decoration: none;
 }
+.nb-nav-item:hover { background: var(--nb-sidebar-hover); color: #fff; }
+.nb-nav-item.active { background: var(--nb-primary); color: #fff; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3); }
+.nb-nav-item:focus-visible { outline: 2px solid #93C5FD; outline-offset: 1px; }
+.nb-nav-ic { color: inherit !important; flex-shrink: 0; }
+.nb-sidebar--rail .nb-nav { padding: 4px 8px 12px; }
+.nb-sidebar--rail .nb-nav-item { justify-content: center; padding: 10px 0; }
+.nb-sidebar--rail .nb-sidebar-header { justify-content: center; padding: 14px 0 8px; }
 
-/* Compact nav progressively as viewport shrinks so all tabs stay visible */
-@media (max-width: 1500px) {
-  .nav-tab { padding: 9px 9px; gap: 4px; font-size: 12.5px; }
+.nb-user {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 14px; background: none; border: none; cursor: pointer; text-align: left;
+  border-top: 1px solid rgba(255, 255, 255, 0.08); color: var(--nb-sidebar-text);
+  transition: background 0.15s;
 }
-@media (max-width: 1280px) {
-  .nav-tab { padding: 8px 7px; font-size: 12px; }
-  .nav-tab .ic { font-size: 13px; }
-  .workspace { padding: 6px 9px; margin-right: 8px; font-size: 12px; }
-}
-@media (max-width: 1100px) {
-  .nav-tab { padding: 7px 6px; gap: 3px; }
-  .nav-tab .ic { display: none; } /* drop emoji icons, keep labels */
-  .workspace span:nth-of-type(2) { display: none; } /* workspace name → only logo */
-}
-.nav-tab .ic { font-size: 14px; line-height: 1; }
-.nav-tab .caret { font-size: 10px; opacity: 0.7; margin-left: 2px; }
-.nav-tab:hover { background: rgba(255,255,255,0.06); color: white; }
-.nav-tab.active { background: rgba(255,255,255,0.12); color: white; font-weight: 500; }
-
-.topnav-spacer { flex: 1; min-width: 0; }
-
-.contact-marquee {
-  flex: 0 0 320px;
-  margin-right: 12px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  background: linear-gradient(90deg, rgba(0,242,255,0.12), rgba(0,119,182,0.12));
-  border: 1px solid rgba(0,242,255,0.30);
-  border-radius: 6px;
-  text-decoration: none;
-  color: #00F2FF;
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  position: relative;
-}
-.contact-marquee:hover {
-  background: linear-gradient(90deg, rgba(0,242,255,0.20), rgba(0,119,182,0.20));
-  border-color: rgba(0,242,255,0.50);
-}
-.marquee-track {
-  display: inline-block;
-  white-space: nowrap;
-  animation: marquee-scroll 32s linear infinite;
-  will-change: transform;
-}
-.contact-marquee:hover .marquee-track {
-  animation-play-state: paused;
-}
-@keyframes marquee-scroll {
-  0%   { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-@media (max-width: 1280px) {
-  .contact-marquee { display: none; }
-}
-
-.topnav-search {
-  max-width: 240px;
-  flex-shrink: 1;
-}
-@media (max-width: 1500px) {
-  .topnav-search { max-width: 180px; }
-}
-@media (max-width: 1280px) {
-  .topnav-search { max-width: 140px; }
-}
-@media (max-width: 1100px) {
-  .topnav-search { display: none; } /* prioritize menu over inline search */
-}
-.topnav-search :deep(.v-field) {
-  background: rgba(255,255,255,0.06) !important;
-  color: white;
-  border-radius: 7px !important;
-}
-.topnav-search :deep(input) { color: white !important; }
-
-.icon-btn,
-:deep(.icon-btn-wrap) > * {
-  width: 39px; height: 39px;
-  border-radius: 50%;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  color: rgba(255,255,255,0.78);
-  position: relative;
-  font-size: 16px;
-  text-decoration: none;
-  background: transparent; border: none;
-}
-.icon-btn:hover,
-:deep(.icon-btn-wrap) > *:hover {
-  background: rgba(255,255,255,0.08);
-  color: white;
-}
-
-.user-avatar {
-  width: 35px; height: 35px;
-  border-radius: 50%;
-  background: linear-gradient(135deg,#fbc02d,#f57c00);
-  color: white; font-weight: 600;
-  border: none; cursor: pointer;
-  margin-left: 9px;
-  font-size: 12px;
+.nb-user:hover { background: rgba(255, 255, 255, 0.06); }
+.nb-sidebar--rail .nb-user { justify-content: center; padding: 12px 0; }
+.nb-user-avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--nb-primary-light), var(--nb-accent));
+  color: #fff; font-weight: 800; font-size: 12.5px;
   display: flex; align-items: center; justify-content: center;
 }
+.nb-user-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.nb-user-name { color: #fff; font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-user-role { font-size: 11.5px; color: rgba(203, 213, 225, 0.7); }
+.nb-user-caret { color: rgba(203, 213, 225, 0.6) !important; }
 
-.smax-main {
-  background: var(--smax-grey-100);
+/* ── Thanh trên ── */
+.nb-topbar {
+  background: rgba(255, 255, 255, 0.92) !important;
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--nb-border-light) !important;
+  color: var(--nb-text) !important;
 }
-.smax-main :deep(.v-main__wrap) { min-height: calc(100vh - var(--smax-topnav-h)); }
+.nb-topbar :deep(.v-toolbar__content) { padding: 0 16px; gap: 8px; }
+.nb-topbar-title { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; white-space: nowrap; }
+.nb-topbar-spacer { flex: 1; min-width: 0; }
+.nb-topbar-search { max-width: 300px; flex: 0 1 300px; }
+.nb-topbar-search :deep(.v-field) { background: var(--nb-bg) !important; border-radius: var(--nb-radius-sm) !important; }
+:deep(.nb-icon-btn-wrap) > * {
+  width: 38px; height: 38px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--nb-text-2);
+}
+:deep(.nb-icon-btn-wrap) > *:hover { background: var(--nb-primary-50); color: var(--nb-primary); }
 
-/* Vuetify menus rendered from v-menu inherit theme automatically.
-   Force light surface in case parent has legacy-dark applied. */
-:deep(.v-overlay__content > .v-list) {
-  background: var(--smax-bg);
-  color: var(--smax-text);
-}
+/* ── Nội dung ── */
+.nb-main { background: var(--nb-bg); }
+.nb-page { min-height: 100%; }
+.nb-page--padded { padding: 20px 24px; }
+
+/* Theme tối (legacy): menu & thanh trên theo nền tối */
+.v-theme--legacy-dark .nb-topbar { background: #112240 !important; border-color: rgba(255, 255, 255, 0.08) !important; color: #E6F1FF !important; }
+.v-theme--legacy-dark .nb-sidebar { background: #0A192F !important; }
+.v-theme--legacy-dark .nb-main { background: #0A192F; }
 </style>

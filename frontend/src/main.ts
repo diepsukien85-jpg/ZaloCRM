@@ -7,6 +7,8 @@ import { setFeatures } from './plugin-api';
 import './assets/tokens.css';
 import './assets/main.css';
 import './assets/rbac-page.css';
+// Giao diện đồng bộ App nội bộ (bot-noi-bo) — nạp SAU cùng để ghi đè kiểu Smax cũ.
+import './assets/noibo-theme.css';
 
 const app = createApp(App);
 app.use(createPinia());

@@ -14,23 +14,27 @@ import { createVuetify } from 'vuetify';
  */
 export const vuetify = createVuetify({
   theme: {
-    defaultTheme: localStorage.getItem('theme') || 'smax-light',
+    // 29/09/2026: chỉ dùng giao diện sáng (đồng bộ App nội bộ — không có giao diện tối; theme tối cũ
+    // chưa hoàn thiện, nhiều trang chữ trắng trên nền sáng).
+    defaultTheme: 'smax-light',
     themes: {
+      // Tên 'smax-light' giữ nguyên (localStorage cũ) — màu theo App nội bộ (bot-noi-bo, 29/09/2026).
       'smax-light': {
         dark: false,
         colors: {
-          background: '#f5f6fa',
+          background: '#F0F7FF',
           surface: '#ffffff',
-          'surface-variant': '#fafbfc',
-          primary: '#2962ff',
-          secondary: '#1f2330',
-          accent: '#2962ff',
-          error: '#ff3d00',
-          warning: '#ff9100',
-          success: '#00c853',
-          info: '#2196f3',
-          'on-background': '#212121',
-          'on-surface': '#212121',
+          'surface-variant': '#F8FBFF',
+          primary: '#2563EB',
+          'primary-darken-1': '#1D4ED8',
+          secondary: '#1E3A5F',
+          accent: '#0EA5E9',
+          error: '#EF4444',
+          warning: '#F59E0B',
+          success: '#10B981',
+          info: '#0EA5E9',
+          'on-background': '#0F172A',
+          'on-surface': '#0F172A',
           'on-primary': '#ffffff',
           'on-secondary': '#ffffff',
         },
@@ -56,13 +60,15 @@ export const vuetify = createVuetify({
     },
   },
   defaults: {
-    VBtn: { variant: 'flat' },
-    VTextField: { variant: 'outlined', density: 'compact' },
-    VSelect: { variant: 'outlined', density: 'compact' },
-    VAutocomplete: { variant: 'outlined', density: 'compact' },
-    VTextarea: { variant: 'outlined', density: 'compact' },
-    VCard: { rounded: 'md', variant: 'flat' },
-    VChip: { rounded: 'lg', size: 'small' },
+    VBtn: { variant: 'flat', rounded: 'lg' },
+    VTextField: { variant: 'outlined', density: 'compact', rounded: 'lg' },
+    VSelect: { variant: 'outlined', density: 'compact', rounded: 'lg' },
+    VAutocomplete: { variant: 'outlined', density: 'compact', rounded: 'lg' },
+    VCombobox: { rounded: 'lg' },
+    VTextarea: { variant: 'outlined', density: 'compact', rounded: 'lg' },
+    VCard: { rounded: 'xl', variant: 'flat' },
+    VChip: { rounded: 'pill', size: 'small' },
     VDialog: { maxWidth: 600 },
+    VMenu: { transition: 'scale-transition' },
   },
 });

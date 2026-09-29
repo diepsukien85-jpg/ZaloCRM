@@ -363,7 +363,7 @@ function maskPhone(p: string): string {
   background: #FFFFFF;
   border: 1px solid #F3F4F6;
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: auto; /* màn hình hẹp: cuộn ngang bảng thay vì cắt cột */
 }
 .accounts-table {
   width: 100%;

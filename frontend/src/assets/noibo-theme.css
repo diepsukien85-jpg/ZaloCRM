@@ -1,0 +1,174 @@
+/* ════════════════════════════════════════════════════════════
+   noibo-theme.css — giao diện ZaloCRM đồng bộ với App nội bộ (bot-noi-bo, 29/09/2026)
+   Design system "Blue Light / Nunito / SaaS Pro": nền xanh rất nhạt, thẻ trắng viền xanh nhạt,
+   bóng đổ ánh xanh, bo góc 10–16px, nút chữ đậm có hiệu ứng nhấn, bảng tiêu đề in hoa màu xanh.
+   Nạp SAU main.css → ghi đè kiểu Smax cũ. Chỉ áp cho theme sáng (smax-light); theme tối giữ nguyên.
+   ════════════════════════════════════════════════════════════ */
+:root {
+  --nb-primary: #2563EB;
+  --nb-primary-light: #3B82F6;
+  --nb-primary-dark: #1D4ED8;
+  --nb-primary-50: #EFF6FF;
+  --nb-primary-100: #DBEAFE;
+  --nb-primary-200: #BFDBFE;
+  --nb-accent: #0EA5E9;
+  --nb-bg: #F0F7FF;
+  --nb-surface: #FFFFFF;
+  --nb-sidebar: #1E3A5F;
+  --nb-sidebar-hover: rgba(255, 255, 255, 0.08);
+  --nb-sidebar-text: #CBD5E1;
+  --nb-text: #0F172A;
+  --nb-text-2: #475569;
+  --nb-text-muted: #94A3B8;
+  --nb-border: #BFDBFE;
+  --nb-border-light: #DBEAFE;
+  --nb-success: #10B981;
+  --nb-success-bg: #D1FAE5;
+  --nb-warning: #F59E0B;
+  --nb-warning-bg: #FEF3C7;
+  --nb-danger: #EF4444;
+  --nb-danger-bg: #FEE2E2;
+  --nb-shadow-sm: 0 2px 8px rgba(37, 99, 235, 0.08);
+  --nb-shadow-md: 0 4px 24px rgba(37, 99, 235, 0.12);
+  --nb-shadow-lg: 0 8px 40px rgba(37, 99, 235, 0.18);
+  --nb-radius: 16px;
+  --nb-radius-md: 12px;
+  --nb-radius-sm: 10px;
+  --nb-radius-xs: 8px;
+  --nb-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --nb-font: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* ── Chữ ── */
+html, body, .v-application {
+  font-family: var(--nb-font) !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.v-application .text-h1, .v-application .text-h2, .v-application .text-h3, .v-application .text-h4,
+.v-application .text-h5, .v-application .text-h6, .v-application .text-subtitle-1, .v-application .text-subtitle-2,
+.v-application .text-body-1, .v-application .text-body-2, .v-application .text-caption, .v-application .text-overline,
+.v-application .text-button {
+  font-family: var(--nb-font) !important;
+}
+body { background: var(--nb-bg); color: var(--nb-text); }
+/* Ngăn kéo ẩn nằm ngoài mép phải (translateX) không được làm trang cuộn ngang trên điện thoại. */
+html, body, .v-application { overflow-x: clip; }
+code, pre, kbd, .font-mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+
+/* ── Hiệu ứng (như App nội bộ) ── */
+@keyframes nbFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes nbSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes nbModalIn { from { opacity: 0; transform: translateY(-10px) scale(0.98); } to { opacity: 1; transform: none; } }
+.nb-page-enter { animation: nbFadeIn 0.3s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .nb-page-enter, .v-theme--smax-light .v-dialog > .v-overlay__content { animation: none !important; }
+  .v-theme--smax-light .v-btn:not(.v-btn--disabled):active { transform: none !important; }
+}
+
+/* ── Nút ── */
+.v-theme--smax-light .v-btn {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-weight: 700;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, color 0.15s ease;
+}
+.v-theme--smax-light .v-btn:not(.v-btn--icon):not(.v-btn--size-x-small) { border-radius: var(--nb-radius-sm) !important; }
+.v-theme--smax-light .v-btn--variant-flat,
+.v-theme--smax-light .v-btn--variant-elevated { border-radius: var(--nb-radius-sm) !important; }
+.v-theme--smax-light .v-btn--variant-flat.bg-primary:not(.v-btn--disabled):hover,
+.v-theme--smax-light .v-btn--variant-elevated.bg-primary:not(.v-btn--disabled):hover {
+  background: var(--nb-primary-dark) !important;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+.v-theme--smax-light .v-btn:not(.v-btn--disabled):not(.v-btn--icon):active { transform: scale(0.98); }
+.v-theme--smax-light .v-btn--variant-outlined { border-color: var(--nb-border) !important; }
+.v-theme--smax-light .v-btn--variant-tonal.text-primary,
+.v-theme--smax-light .v-btn--variant-tonal[class*="text-primary"] { background: var(--nb-primary-50); }
+
+/* ── Thẻ (card) ── */
+.v-theme--smax-light .v-card {
+  border: 1px solid var(--nb-border-light) !important;
+  border-radius: var(--nb-radius) !important;
+  box-shadow: var(--nb-shadow-sm) !important;
+}
+.v-theme--smax-light .v-card[href]:hover,
+.v-theme--smax-light .v-card.v-card--link:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--nb-shadow-md) !important;
+  border-color: var(--nb-border) !important;
+}
+.v-theme--smax-light .v-card.v-card--link { transition: transform 0.2s var(--nb-ease), box-shadow 0.2s var(--nb-ease); }
+.v-theme--smax-light .v-card-title { font-weight: 800; letter-spacing: -0.01em; }
+/* Nút đặt trong tiêu đề thẻ không phóng to theo cỡ chữ tiêu đề. */
+.v-theme--smax-light .v-card-title .v-btn { font-size: 0.8125rem; font-weight: 700; letter-spacing: 0; }
+
+/* ── Ô nhập ── */
+.v-theme--smax-light .v-field { border-radius: var(--nb-radius-sm) !important; }
+/* Viền ô nhập xanh nhạt — chỉ tô viền (nhãn nằm trong .v-field__outline nên không đổi màu cả khối). */
+.v-theme--smax-light .v-field--variant-outlined:not(.v-field--focused):not(.v-field--error) .v-field__outline__start,
+.v-theme--smax-light .v-field--variant-outlined:not(.v-field--focused):not(.v-field--error) .v-field__outline__end,
+.v-theme--smax-light .v-field--variant-outlined:not(.v-field--focused):not(.v-field--error) .v-field__outline__notch::before,
+.v-theme--smax-light .v-field--variant-outlined:not(.v-field--focused):not(.v-field--error) .v-field__outline__notch::after { border-color: #93C5FD; }
+.v-theme--smax-light .v-field .v-label.v-field-label--floating { color: var(--nb-text-2); opacity: 1; }
+.v-theme--smax-light .v-field--focused { box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12) !important; }
+.v-theme--smax-light .v-field--focused .v-field__outline { color: var(--nb-primary); }
+.v-theme--smax-light .v-label { font-weight: 600; }
+
+/* ── Bảng ── */
+.v-theme--smax-light .v-table { border-radius: var(--nb-radius-md); }
+.v-theme--smax-light .v-table > .v-table__wrapper > table > thead > tr > th {
+  background: var(--nb-primary-50) !important;
+  color: var(--nb-primary) !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--nb-border-light) !important;
+}
+.v-theme--smax-light .v-table > .v-table__wrapper > table > tbody > tr > td {
+  border-bottom: 1px solid var(--nb-border-light) !important;
+  color: var(--nb-text-2);
+  font-weight: 500;
+}
+.v-theme--smax-light .v-table > .v-table__wrapper > table > tbody > tr:hover > td { background: #F8FBFF; }
+
+/* ── Hộp thoại / menu nổi ── */
+.v-theme--smax-light .v-dialog > .v-overlay__content { animation: nbModalIn 0.2s ease; }
+.v-theme--smax-light .v-dialog > .v-overlay__content > .v-card,
+.v-theme--smax-light .v-dialog > .v-overlay__content > .v-sheet {
+  border-radius: var(--nb-radius) !important;
+  box-shadow: var(--nb-shadow-lg) !important;
+}
+.v-theme--smax-light .v-overlay__scrim { background: rgba(15, 23, 42, 0.45); opacity: 1; }
+.v-theme--smax-light .v-overlay__content > .v-list,
+.v-theme--smax-light .v-menu > .v-overlay__content > .v-card {
+  border-radius: var(--nb-radius-md) !important;
+  border: 1px solid var(--nb-border-light);
+  box-shadow: var(--nb-shadow-md) !important;
+  padding: 6px;
+}
+.v-theme--smax-light .v-overlay__content > .v-list .v-list-item { border-radius: var(--nb-radius-xs); min-height: 38px; }
+.v-theme--smax-light .v-list-item-title { font-weight: 600; }
+.v-theme--smax-light .v-list-item--active { background: var(--nb-primary-50) !important; color: var(--nb-primary) !important; }
+.v-theme--smax-light .v-list-subheader { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--nb-text-muted); }
+
+/* ── Tab ── */
+.v-theme--smax-light .v-tab { text-transform: none !important; letter-spacing: 0 !important; font-weight: 700; }
+.v-theme--smax-light .v-tabs .v-tab--selected { color: var(--nb-primary); }
+
+/* ── Chip / nhãn ── */
+.v-theme--smax-light .v-chip { font-weight: 700; }
+
+/* ── Thông báo nổi / cảnh báo ── */
+.v-theme--smax-light .v-alert { border-radius: var(--nb-radius-md) !important; }
+.v-theme--smax-light .v-snackbar__wrapper { border-radius: var(--nb-radius-md) !important; box-shadow: var(--nb-shadow-lg) !important; }
+
+/* ── Thanh cuộn ── */
+.v-theme--smax-light ::-webkit-scrollbar { width: 8px; height: 8px; }
+.v-theme--smax-light ::-webkit-scrollbar-thumb { background: var(--nb-border); border-radius: 999px; }
+.v-theme--smax-light ::-webkit-scrollbar-thumb:hover { background: #93C5FD; }
+
+/* ── Tiện ích dùng chung (giống class App nội bộ) ── */
+.nb-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; background: var(--nb-primary-100); color: var(--nb-primary); }
+.nb-card { background: var(--nb-surface); border: 1px solid var(--nb-border-light); border-radius: var(--nb-radius); box-shadow: var(--nb-shadow-sm); }

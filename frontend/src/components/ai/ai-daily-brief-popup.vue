@@ -2,7 +2,7 @@
   <Teleport to="body">
     <!-- Nút nổi (mobile: ẩn khi panel mở toàn màn hình, header đã có nút đóng) -->
     <button
-      v-if="authStore.isAuthenticated && !(isMobile && isOpen)"
+      v-if="authStore.isAuthenticated && !(isMobile && isOpen) && (!onChat || isOpen)"
       class="adb-fab"
       :class="{ 'adb-fab--open': isOpen, 'adb-fab--mobile': isMobile }"
       type="button"
@@ -149,12 +149,16 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useMobile } from '@/composables/use-mobile';
 import { useAiDailyBrief, SUGGESTED_QUESTIONS } from '@/composables/use-ai-daily-brief';
 import { formatInOrgTz, getOrgParts } from '@/composables/use-org-timezone';
 
 const authStore = useAuthStore();
+const route = useRoute();
+// Trang Tin nhắn dày đặc (ô soạn tin, ghi chú, nút gửi ở mọi góc) → ẩn nút nổi, dùng ở các trang khác.
+const onChat = computed(() => route.path.startsWith('/chat'));
 const { isMobile } = useMobile();
 const {
   isOpen, snapshot, snapshotLoading, snapshotError, messages, asking, hasMessages, unseenAnswers,
@@ -240,11 +244,12 @@ watch(isOpen, (open) => {
 
 <style scoped>
 /* ── Nút nổi ─────────────────────────────────────────────────────────── */
+/* Máy tính: nút tròn gọn, rê chuột mới hiện chữ (nút dài cũ che phân trang / thông báo / ô soạn tin). */
 .adb-fab {
   position: fixed;
-  right: 22px;
-  bottom: 22px;
-  z-index: 1200;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1003; /* dưới menu trượt (drawer) của Vuetify */
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -261,6 +266,13 @@ watch(isOpen, (open) => {
   box-shadow: 0 8px 24px rgba(31, 35, 48, 0.28), 0 1px 0 rgba(255,255,255,0.06) inset;
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
+.adb-fab:not(.adb-fab--mobile):not(.adb-fab--open) { height: 42px; padding: 0 8px; gap: 0; }
+.adb-fab:not(.adb-fab--mobile):not(.adb-fab--open) .adb-fab__label {
+  max-width: 0; overflow: hidden; white-space: nowrap; transition: max-width 0.2s ease, margin 0.2s ease;
+}
+.adb-fab:not(.adb-fab--mobile):not(.adb-fab--open):hover .adb-fab__label,
+.adb-fab:not(.adb-fab--mobile):not(.adb-fab--open):focus-visible .adb-fab__label { max-width: 220px; margin: 0 8px 0 9px; }
+
 .adb-fab:hover { transform: translateY(-1px); box-shadow: 0 12px 28px rgba(31, 35, 48, 0.32); }
 .adb-fab:focus-visible { outline: 3px solid rgba(41, 98, 255, 0.45); outline-offset: 2px; }
 .adb-fab--open { background: var(--smax-grey-700, #5a6478); }

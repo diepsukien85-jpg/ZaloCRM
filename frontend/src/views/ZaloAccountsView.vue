@@ -739,6 +739,7 @@ onMounted(async () => {
 
 .filter-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   background: white;
@@ -748,7 +749,8 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 .search {
-  flex: 1;
+  flex: 1 1 220px;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;

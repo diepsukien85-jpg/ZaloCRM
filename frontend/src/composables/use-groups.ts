@@ -36,8 +36,11 @@ export function useGroups() {
     loading.value = true;
     try {
       const res = await api.get(`${base(accountId)}/${groupId}`);
-      selectedGroup.value = res.data.group;
-      return res.data.group;
+      // BE trả raw SDK getGroupInfo ({ gridInfoMap: { [groupId]: info } }) → lấy đúng thông tin nhóm.
+      const raw = res.data.group;
+      const info = raw?.gridInfoMap?.[groupId] ?? raw;
+      selectedGroup.value = info;
+      return info;
     } catch (err) {
       console.error('Failed to fetch group:', err);
       return null;
@@ -50,9 +53,15 @@ export function useGroups() {
     loading.value = true;
     try {
       const res = await api.get(`${base(accountId)}/${groupId}/members`);
-      members.value = res.data.members ?? [];
+      const raw = res.data.members;
+      // BE có thể trả raw SDK { profiles: { [uid]: profile } } → đổi sang mảng; bỏ mục trùng mã nhóm (không phải thành viên).
+      members.value = Array.isArray(raw) ? raw
+        : Object.entries(raw?.profiles ?? {})
+          .filter(([uid]) => uid !== groupId)
+          .map(([uid, p]: [string, any]) => ({ ...p, id: uid, uid }));
     } catch (err) {
       console.error('Failed to fetch members:', err);
+      members.value = [];
     } finally {
       loading.value = false;
     }
@@ -195,7 +204,8 @@ export function useGroups() {
       const res = await api.get(`${base(accountId)}/${groupId}/blocked`);
       blocked.value = res.data.blocked ?? [];
     } catch (err) {
-      console.error('Failed to fetch blocked:', err);
+      console.debug('Failed to fetch blocked:', err);
+      blocked.value = [];
     } finally {
       loading.value = false;
     }
@@ -207,7 +217,8 @@ export function useGroups() {
       const res = await api.get(`${base(accountId)}/${groupId}/pending`);
       pending.value = res.data.pending ?? [];
     } catch (err) {
-      console.error('Failed to fetch pending:', err);
+      console.debug('Failed to fetch pending:', err);
+      pending.value = [];
     } finally {
       loading.value = false;
     }
