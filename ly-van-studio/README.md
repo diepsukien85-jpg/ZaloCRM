@@ -31,7 +31,7 @@ Production: `npm run build && npm start` hoặc Docker Compose (docs/DEPLOYMENT.
 | `npm run dev` / `build` / `start` | chạy / build / chạy production (cổng 3100) |
 | `npm run typecheck` · `npm run lint` | kiểm tra kiểu / lint |
 | `npm test` | unit + integration (cần PostgreSQL, DB `lyvan_test`; tự reset schema) |
-| `npm run test:e2e` | e2e API qua HTTP (cần server đang chạy: `BASE=http://localhost:3100`) |
+| `npm run test:e2e` / `test:e2e:ui` | e2e API / giao diện (Playwright) qua HTTP, cần server đang chạy (`BASE=http://localhost:3100`) |
 | `npm run db:migrate` · `db:seed` · `db:reset` | migration / seed / reset (chỉ dev) |
 
 Biến test DB: `TEST_DATABASE_URL` (mặc định `postgres://lyvan:lyvan@localhost:5432/lyvan_test`).

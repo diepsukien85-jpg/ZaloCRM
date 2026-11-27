@@ -12,10 +12,11 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:int": "vitest run tests/integration",
-    "test:e2e": "node tests/e2e/smoke.mjs",
+    "test:e2e": "node tests/e2e/api.mjs",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "db:reset": "tsx scripts/migrate.ts --reset && tsx scripts/seed.ts"
+    "db:reset": "tsx scripts/migrate.ts --reset && tsx scripts/seed.ts",
+    "test:e2e:ui": "node tests/e2e/ui.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
