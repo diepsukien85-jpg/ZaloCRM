@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lyvan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD}
+      POSTGRES_DB: lyvan_studio
+    volumes: [dbdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+  web:
+    build: .
+    depends_on: [db]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://lyvan:${POSTGRES_PASSWORD}@db:5432/lyvan_studio
+      UPLOAD_DIR: /app/storage
+    ports: ["3100:3100"]
+    volumes: [uploads:/app/storage]
+    restart: unless-stopped
+volumes:
+  dbdata:
+  uploads:
