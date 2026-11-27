@@ -193,25 +193,31 @@ const dailySteps: StepFn[] = [
     }
     return { scripts_created: n };
   },
-  // 11. Biến thể đa nền tảng (bản con, không tính vào KPI nội dung gốc)
+  // 11. Biến thể đa nền tảng (bản con, không tính vào KPI nội dung gốc). Tuỳ chọn: lỗi ở đây (vd. hết hạn mức AI) KHÔNG làm mất các bản nháp đã tạo.
   async (ctx, s) => {
-    let n = 0;
+    let n = 0; const warnings: string[] = [];
     for (const c of s.contents) {
       const platforms = c.kind === 'post' ? ['facebook_profile', 'facebook_page'] : ['facebook_reels', 'tiktok', 'youtube_shorts'];
-      const r = await A.makeVariants(ctx, { title: c.title, body: c.body, hook: c.hook, hashtags: c.hashtags, cta: c.cta, platforms });
-      for (const v of r.data.variants) {
-        await q(`INSERT INTO content_variants(workspace_id, content_id, platform, title, hook, caption, hashtags, aspect_ratio, duration_sec, cta, body, is_demo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-                 ON CONFLICT (content_id, platform) DO UPDATE SET title=EXCLUDED.title, hook=EXCLUDED.hook, caption=EXCLUDED.caption, hashtags=EXCLUDED.hashtags, body=EXCLUDED.body`,
-          [ctx.workspaceId, c.id, v.platform, v.title, v.hook, v.caption, v.hashtags, v.aspect_ratio, v.duration_sec ?? null, v.cta, v.body, r.meta.demo]);
-        n++;
+      try {
+        const r = await A.makeVariants(ctx, { title: c.title, body: c.body, hook: c.hook, hashtags: c.hashtags, cta: c.cta, platforms });
+        for (const v of r.data.variants) {
+          await q(`INSERT INTO content_variants(workspace_id, content_id, platform, title, hook, caption, hashtags, aspect_ratio, duration_sec, cta, body, is_demo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                   ON CONFLICT (content_id, platform) DO UPDATE SET title=EXCLUDED.title, hook=EXCLUDED.hook, caption=EXCLUDED.caption, hashtags=EXCLUDED.hashtags, body=EXCLUDED.body`,
+            [ctx.workspaceId, c.id, v.platform, v.title, v.hook, v.caption, v.hashtags, v.aspect_ratio, v.duration_sec ?? null, v.cta, v.body, r.meta.demo]);
+          n++;
+        }
+      } catch (e) {
+        if ((e as { status?: number }).status === 402 || e instanceof Cancelled) throw e; // hết ngân sách/huỷ: dừng thật
+        warnings.push(`${c.title.slice(0, 40)}: ${(e as Error).message.slice(0, 160)}`);
       }
     }
-    return { variants_created: n };
+    s.warnings = warnings;
+    return { variants_created: n, ...(warnings.length ? { warnings: `${warnings.length} nội dung chưa có biến thể — tạo lại trong Content Factory` } : {}) };
   },
   // 12. Lưu & thông báo
   async (ctx, s) => {
     s.result = { contents: s.contents.map((c: { id: string; title: string; kind: string }) => ({ id: c.id, title: c.title, kind: c.kind })), ideas_saved: s.savedIdeas.length, demo: !!s.demo };
-    s.summary = `${s.contents.length} bản nháp đã sẵn sàng chờ duyệt${s.demo ? ' (DỮ LIỆU DEMO – chưa cấu hình AI)' : ''}`;
+    s.summary = `${s.contents.length} bản nháp đã sẵn sàng chờ duyệt${s.demo ? ' (DỮ LIỆU DEMO – chưa cấu hình AI)' : ''}${s.warnings?.length ? ` — lưu ý: ${s.warnings.length} nội dung chưa tạo được biến thể` : ''}`;
     return { drafts: s.contents.length, summary: s.summary };
   },
 ];

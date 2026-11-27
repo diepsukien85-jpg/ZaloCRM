@@ -81,7 +81,7 @@ await test('3-4. thương hiệu & DNA: cập nhật tạo phiên bản mới', 
 });
 
 await test('5. cấu hình AI provider: khoá không bao giờ trả về frontend', async () => {
-  const put = await A.c.put('/api/settings/ai', { primary: 'anthropic', fallback: ['openai'], cache_ttl_hours: 24, timeout_ms: 60000, providers: { anthropic: { enabled: true, model: 'claude-sonnet-5-5', api_key: 'sk-ant-e2e-secret-key-12345' }, openai: { enabled: true, model: 'gpt-4.1' }, gemini: { enabled: false, model: 'gemini-2.5-flash' } }, task_models: {} });
+  const put = await A.c.put('/api/settings/ai', { primary: 'anthropic', fallback: ['openai'], cache_ttl_hours: 24, timeout_ms: 60000, providers: { anthropic: { enabled: true, model: 'claude-sonnet-5-5', api_key: 'sk-ant-e2e-secret-key-12345' }, openai: { enabled: true, model: 'gpt-4.1' }, gemini: { enabled: false, model: 'gemini-3.5-flash' } }, task_models: {} });
   assert.equal(put.status, 200, put.text);
   const got = await A.c.get('/api/settings/ai');
   assert.ok(!got.text.includes('sk-ant-e2e'));
@@ -91,7 +91,7 @@ await test('5. cấu hình AI provider: khoá không bao giờ trả về fronte
   const t = await A.c.post('/api/settings/ai/test', { provider: 'gemini' });
   assert.equal(t.json.ok, false);
   // trả lại chế độ DEMO để các bước sau không gọi API ngoài
-  await A.c.put('/api/settings/ai', { primary: 'anthropic', fallback: [], cache_ttl_hours: 24, timeout_ms: 60000, providers: { anthropic: { enabled: true, model: 'claude-sonnet-5-5', clear_key: true }, openai: { enabled: true, model: 'gpt-4.1' }, gemini: { enabled: true, model: 'gemini-2.5-flash' } }, task_models: {} });
+  await A.c.put('/api/settings/ai', { primary: 'anthropic', fallback: [], cache_ttl_hours: 24, timeout_ms: 60000, providers: { anthropic: { enabled: true, model: 'claude-sonnet-5-5', clear_key: true }, openai: { enabled: true, model: 'gpt-4.1' }, gemini: { enabled: true, model: 'gemini-3.5-flash' } }, task_models: {} });
 });
 
 await test('6-7. từ khoá: mở rộng (DEMO có nhãn), lưu yêu thích, volume bắt buộc nguồn', async () => {

@@ -9,7 +9,7 @@ export const ENV_KEYS: Record<ProviderId, string> = { anthropic: 'ANTHROPIC_API_
 export const DEFAULT_MODELS: Record<ProviderId, string> = {
   anthropic: 'claude-sonnet-5-5',
   openai: 'gpt-4.1',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.5-flash',
 };
 
 export type AiSettings = {

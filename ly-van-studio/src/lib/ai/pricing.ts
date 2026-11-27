@@ -13,6 +13,7 @@ export const DEFAULT_PRICING: PricingTable = {
     { provider: 'anthropic', model: 'claude-haiku-5-5', input_per_m: 1, output_per_m: 5 },
     { provider: 'anthropic', model: 'claude-opus-5-5', input_per_m: 5, output_per_m: 25 },
     { provider: 'openai', model: 'gpt-4.1', input_per_m: 2, output_per_m: 8 },
+    { provider: 'gemini', model: 'gemini-3.5-flash', input_per_m: 0.3, output_per_m: 2.5 },
     { provider: 'gemini', model: 'gemini-2.5-flash', input_per_m: 0.3, output_per_m: 2.5 },
   ],
 };

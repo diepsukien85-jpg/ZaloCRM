@@ -14,7 +14,9 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
     const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal: ctl.signal });
     const text = await res.text();
     if (!res.ok) {
-      const retryable = res.status === 429 || res.status >= 500 || res.status === 408;
+      // 429 do HẾT HẠN MỨC (quota) thì thử lại ngay vô ích; 429 do tốc độ thì vẫn thử lại
+      const quota = res.status === 429 && /quota|billing/i.test(text);
+      const retryable = (res.status === 429 && !quota) || res.status >= 500 || res.status === 408;
       throw new ProviderError(`HTTP ${res.status}: ${text.slice(0, 300)}`, res.status, retryable);
     }
     return JSON.parse(text);
@@ -49,12 +51,14 @@ export const adapters: Record<ProviderId, Adapter> = {
       { systemInstruction: { parts: [{ text: r.system }] }, contents: [{ role: 'user', parts: [{ text: r.user }] }],
         generationConfig: { maxOutputTokens: r.maxTokens, temperature: r.temperature ?? 0.7, ...(r.json ? { responseMimeType: 'application/json' } : {}) } }, r.timeoutMs);
     const text = (j.candidates?.[0]?.content?.parts ?? []).map((p: { text?: string }) => p.text ?? '').join('');
+    // Mô hình "suy nghĩ" tính cả token suy nghĩ vào giới hạn đầu ra → có thể trả rỗng khi maxOutputTokens quá nhỏ
+    if (!text) throw new ProviderError(`Gemini trả rỗng (finishReason=${j.candidates?.[0]?.finishReason ?? j.promptFeedback?.blockReason ?? 'không rõ'})`, undefined, j.candidates?.[0]?.finishReason === 'MAX_TOKENS' ? false : true);
     return { text, inputTokens: j.usageMetadata?.promptTokenCount ?? 0, outputTokens: j.usageMetadata?.candidatesTokenCount ?? 0 };
   },
 };
 
 export async function testProvider(p: ProviderId, key: string, model: string) {
-  const r = await adapters[p](key, { system: 'Trả lời đúng một từ.', user: 'Nói: OK', model, maxTokens: 16, timeoutMs: 20000, json: false });
+  const r = await adapters[p](key, { system: 'Trả lời đúng một từ.', user: 'Nói: OK', model, maxTokens: 512, timeoutMs: 30000, json: false });
   return { ok: true, sample: r.text.slice(0, 40), inputTokens: r.inputTokens, outputTokens: r.outputTokens };
 }
 
