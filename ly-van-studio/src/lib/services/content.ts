@@ -72,6 +72,10 @@ export async function editContent(workspaceId: string, userId: string, id: strin
           [workspaceId, id, version, next.title, next.body, next.hooks, next.caption, opts.note ?? '', source, userId]);
       }
     }
+    if (!textChanged && opts.note && (opts.source ?? 'manual') === 'manual') {
+      // Lưu tay kèm ghi chú sau khi autosave đã lưu nội dung: gắn ghi chú vào phiên bản hiện tại và đổi nguồn thành 'manual'
+      await c.query("UPDATE content_versions SET change_note=$3, source='manual' WHERE content_id=$1 AND version=$2", [id, version, opts.note]);
+    }
     const status = textChanged && ['approved', 'ready_to_publish'].includes(cur.status) ? 'draft' : cur.status; // sửa sau khi duyệt → phải duyệt lại
     const r = (await c.query(
       `UPDATE contents SET title=$3, body=$4, hooks=$5, caption=$6, hashtags=$7, cta=$8, pillar=$9, platform=$10, channel_id=$11, campaign_id=$12, keyword_ids=$13, references_text=$14, assignee_id=$15, privacy=$16, current_version=$17, status=$18

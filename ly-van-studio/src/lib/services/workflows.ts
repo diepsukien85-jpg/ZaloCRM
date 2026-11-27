@@ -10,7 +10,7 @@ import type { AgentCtx } from '../ai/agents';
 
 export type WorkflowKey = 'daily' | 'weekly' | 'monthly';
 type StepDef = { key: string; name: string };
-type State = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+type State = Record<string, any>;  
 
 const vnToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
 

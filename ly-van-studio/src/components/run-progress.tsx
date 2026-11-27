@@ -17,7 +17,8 @@ export function RunProgress({ runId, onDone }: { runId: string; onDone?: (d: Run
   const [d, setD] = useState<RunData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const { toast } = useUi();
-  const done = useRef(onDone); done.current = onDone;
+  const done = useRef(onDone);
+  useEffect(() => { done.current = onDone; });
 
   useEffect(() => {
     let stop = false;

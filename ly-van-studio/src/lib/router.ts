@@ -5,7 +5,7 @@ import { checkOrigin, handleError } from './http';
 import { badRequest, forbidden, unauthorized } from './errors';
 import { rateLimit } from './ratelimit';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 export type Ctx<B = any> = {
   user: AuthCtx['user']; workspaceId: string; role: Role;
   req: Request; body: B; params: Record<string, string>; query: URLSearchParams;
