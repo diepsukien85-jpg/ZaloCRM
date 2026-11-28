@@ -1,0 +1,27 @@
+# Blueprint cho Render.com (triển khai thử nghiệm). Chưa được kiểm thử trên Render thật.
+services:
+  - type: web
+    name: ly-van-studio
+    runtime: node
+    rootDir: ly-van-studio
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ly-van-db
+          property: connectionString
+      - key: APP_SECRET
+        generateValue: true
+      - key: AI_DEMO_MODE      # true = không gọi AI thật, không tốn phí. Đổi false + thêm khoá khi muốn dùng AI thật
+        value: "true"
+      - key: ALLOW_SIGNUP
+        value: "true"
+      - key: UPLOAD_DIR
+        value: /tmp/storage     # đĩa tạm: file tải lên sẽ mất khi khởi động lại (bản thử)
+databases:
+  - name: ly-van-db
+    databaseName: lyvan_studio
+    user: lyvan
+    plan: free
