@@ -27,8 +27,13 @@ npm start        # cổng 3100
 ```
 Dùng systemd/pm2 để giữ tiến trình.
 
-## C. Vercel + Postgres (Supabase/Neon)
-Chạy được phần web/API. Lưu ý: (1) workflow chạy bằng `after()` trong hàm serverless — giới hạn thời gian (`maxDuration`) của gói Vercel có thể cắt Daily Agent; cần worker riêng hoặc nâng giới hạn; (2) **đĩa serverless không bền** → upload media cần chuyển sang S3-compatible (chưa triển khai); (3) cron dùng Vercel Cron gọi `/api/cron/tick` kèm header `Authorization: Bearer <CRON_SECRET>` (kiểm tra tài liệu Vercel hiện hành về cách gửi header). Hiện chưa kiểm thử trên Vercel.
+## C. Vercel + Neon/Supabase (bản thử)
+Chưa được kiểm thử trên Vercel thật.
+1. **Cơ sở dữ liệu:** tạo Postgres miễn phí ở Neon (neon.tech) hoặc Supabase, sao chép chuỗi kết nối (nên dùng bản "pooled").
+2. **Tạo bảng (làm 1 lần, trên máy có Node):** `cd ly-van-studio && npm install && DATABASE_URL="<chuỗi kết nối>" npm run db:migrate`.
+3. **Vercel:** Add New → Project → chọn repo → **Root Directory = `ly-van-studio`**, nhánh `claude/ly-van-ai-content-studio-qc777k`.
+4. **Environment Variables:** `DATABASE_URL`, `APP_SECRET` (chuỗi ngẫu nhiên ≥32 ký tự), `AI_DEMO_MODE=true`, `ALLOW_SIGNUP=true`, `UPLOAD_DIR=/tmp/storage`. Bấm Deploy.
+5. Giới hạn: đĩa serverless **không bền** (file tải lên mất); Daily Agent với AI thật mất vài phút và có thể bị cắt bởi giới hạn thời gian hàm của gói Vercel (kiểm tra gói của bạn) — ở chế độ DEMO chạy dưới 1 giây; chưa có cron (lịch tự động đang tắt; Vercel Cron gói miễn phí bị giới hạn tần suất).
 
 ## Biến môi trường
 Xem `.env.example`. Khoá AI có thể đặt ở env hoặc nhập trong Cài đặt (mã hoá trong DB).

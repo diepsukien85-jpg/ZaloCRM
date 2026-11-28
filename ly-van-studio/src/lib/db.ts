@@ -10,7 +10,7 @@ export function pool(): pg.Pool {
   if (!g.__pool) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error('Thiếu DATABASE_URL');
-    g.__pool = new pg.Pool({ connectionString: url, max: 10 });
+    g.__pool = new pg.Pool({ connectionString: url, max: process.env.VERCEL ? 3 : 10 });
   }
   return g.__pool;
 }
